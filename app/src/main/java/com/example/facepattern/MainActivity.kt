@@ -103,7 +103,7 @@ class MainActivity : AppCompatActivity() {
         }, LinearLayout.LayoutParams(0, dp(48), 1f))
         row.addView(Button(this).apply {
             text = "重置位置"
-            setOnClickListener { overlay.resetPattern() }
+            setOnClickListener { overlay.resetTransform() }
         }, LinearLayout.LayoutParams(0, dp(48), 1f))
         panel.addView(row)
         root.addView(panel, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
@@ -251,7 +251,7 @@ private class FaceOverlay(context: Context) : View(context) {
         invalidate()
     }
 
-    fun resetPattern() {
+    fun resetTransform() {
         offsetX = 0f
         offsetY = 0f
         userScale = 0.58f
