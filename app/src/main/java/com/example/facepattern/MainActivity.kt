@@ -201,11 +201,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    override fun onPause() {
-        cameraProvider?.unbindAll()
-        super.onPause()
-    }
-
     override fun onDestroy() {
         cameraProvider?.unbindAll()
         landmarker?.close()
