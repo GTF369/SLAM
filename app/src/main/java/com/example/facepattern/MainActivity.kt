@@ -42,7 +42,7 @@ import kotlin.math.hypot
 
 class MainActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
-    private lateinit var overlay: FaceOverlay
+    private lateinit var faceOverlay: FaceOverlay
     private lateinit var status: TextView
     private var landmarker: FaceLandmarker? = null
     private var cameraExecutor: ExecutorService? = null
@@ -55,7 +55,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 val bitmap = contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
                 if (bitmap != null) {
-                    overlay.setPattern(bitmap)
+                    faceOverlay.setPattern(bitmap)
                     status.text = "花纹已载入，可拖动、缩放和旋转"
                 } else Toast.makeText(this, "无法读取这张图片", Toast.LENGTH_SHORT).show()
             } catch (_: Exception) {
@@ -79,10 +79,10 @@ class MainActivity : AppCompatActivity() {
             scaleType = PreviewView.ScaleType.FILL_CENTER
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
-        overlay = FaceOverlay(this)
+        faceOverlay = FaceOverlay(this)
         val root = FrameLayout(this)
         root.addView(previewView, FrameLayout.LayoutParams(-1, -1))
-        root.addView(overlay, FrameLayout.LayoutParams(-1, -1))
+        root.addView(faceOverlay, FrameLayout.LayoutParams(-1, -1))
 
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -103,7 +103,7 @@ class MainActivity : AppCompatActivity() {
         }, LinearLayout.LayoutParams(0, dp(48), 1f))
         row.addView(Button(this).apply {
             text = "重置位置"
-            setOnClickListener { overlay.resetTransform() }
+            setOnClickListener { faceOverlay.resetTransform() }
         }, LinearLayout.LayoutParams(0, dp(48), 1f))
         panel.addView(row)
         root.addView(panel, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
@@ -122,7 +122,7 @@ class MainActivity : AppCompatActivity() {
                     .setResultListener { result, _ ->
                         val points = result.faceLandmarks().firstOrNull()?.map { PointF(it.x(), it.y()) } ?: emptyList()
                         runOnUiThread {
-                            overlay.updateFace(points)
+                            faceOverlay.updateFace(points)
                             status.text = if (points.isNotEmpty()) "已识别人脸 · 单指移动，双指缩放和旋转" else "请正对前置摄像头，保持光线充足"
                         }
                     }
