@@ -1,6 +1,7 @@
 package com.example.facepattern
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -78,7 +79,7 @@ class MainActivity : AppCompatActivity() {
             scaleType = PreviewView.ScaleType.FILL_CENTER
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
-        overlay = FaceOverlay()
+        overlay = FaceOverlay(this)
         val root = FrameLayout(this)
         root.addView(previewView, FrameLayout.LayoutParams(-1, -1))
         root.addView(overlay, FrameLayout.LayoutParams(-1, -1))
@@ -222,7 +223,7 @@ class MainActivity : AppCompatActivity() {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 }
 
-private class FaceOverlay : View {
+private class FaceOverlay(context: Context) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private var pattern: Bitmap? = null
     private var points: List<PointF> = emptyList()
