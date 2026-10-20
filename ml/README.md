@@ -1,121 +1,90 @@
 # Data collection, ranking model, and curvature analysis
 
-The Android app can export two separate CSV files into `Downloads/BrowDesign` on Android 10 and later:
+The Android app exports anonymous preference feedback and separate curvature measurements to `Downloads/BrowDesign` on Android 10 and later. The preference CSV records candidate type/parameters, face geometry ratios, a 1–5 customer rating and the selected flag. The curvature CSV records region, measured skin-surface arc length, chord length, correction ratio and timestamp. No face photo is included in these CSVs.
 
-- `brow_preference_feedback_*.csv`: anonymous case ID, candidate type and parameters, face width/height ratio, brow asymmetry proxy, rating (1–5), and whether the customer chose the design.
-- `brow_curvature_calibration_*.csv`: region, measured skin-surface arc length, measured chord length, correction ratio, and timestamp.
+Collect and export such data only after appropriate consent for the stated use. Keep a data register and avoid names, phone numbers, appointment numbers and any identifiers that can reveal a customer. Exported case IDs must be stable per customer across that customer's candidate rows but must not identify the person.
 
-The app does not export face photos in either data file. Obtain informed permission for collecting preference or measurement data, minimize retention, and avoid putting names, phone numbers, appointment IDs, or other identifying data into exported files.
+## 1. Preference model: development, calibration, and external test
 
-## Commercial data licensing
+The app's built-in geometry score is a transparent prototype, not a learned probability. The training pipeline below intentionally produces a non-releasable model unless it receives separate data for calibration and external validation. Synthetic test fixtures in `ml/tests` only test software behavior. They are not customer data and must never be used to build the app model.
 
-Do not assume a public face dataset can be used commercially. For example, the official CelebAMask-HQ agreement explicitly limits the images and derived data to non-commercial research and prohibits commercial exploitation. See the [official dataset page](https://mmlab.ie.cuhk.edu.hk/projects/CelebA/CelebAMask_HQ.html). Do not use it to train this product unless the rights holder grants a separate written commercial license.
-
-For product training, prefer:
-- consented, purpose-limited salon images and annotations with documented authorization for model training and evaluation;
-- a separately licensed dataset whose written terms expressly allow commercial model training, derivation of weights, deployment, and the target regions;
-- a data processing and retention policy matching the target market.
-
-Keep a dataset register with source, license/consent basis, permitted uses, collection date, annotation version, permitted retention, and deletion status. A dataset being downloadable or marked "open" is not proof that commercial use is permitted.
-
-## 1. Preference model
-
-Install Python dependencies:
+Install dependencies:
 
 ```bash
 python -m pip install -r ml/requirements.txt
 ```
 
-Collect observations from multiple distinct customers, then run:
+Prepare three CSV files containing mutually disjoint anonymous customers:
+
+- **Development CSV**: used to train model coefficients and for an internal case-grouped 80/20 diagnostic split.
+- **Calibration CSV**: used only to fit a Platt scaling transform to turn raw logits into a calibrated estimate for a high customer rating.
+- **External validation CSV**: used only once for a final estimate of ranking/discrimination and calibration quality. It must not be used to tune the model.
 
 ```bash
-python ml/train_brow_ranker.py /path/to/brow_preference_feedback.csv
+python ml/train_brow_ranker.py development.csv \
+  --calibration-csv calibration.csv \
+  --external-validation-csv external_validation.csv \
+  --output app/src/main/assets/brow_ranker.json
 ```
 
-The script rejects fewer than 30 distinct cases and keeps each `case_id` exclusively in either train or test. It standardizes features on the training fold only for the grouped 80/20 holdout assessment, reports holdout metrics, then refits the deployable candidate using all available consented cases and writes `app/src/main/assets/brow_ranker.json`. The reported holdout metrics describe the assessment model, not the final all-data fit. Copy/commit the JSON into the Android source tree and rebuild to enable local model inference. If the model file is absent or invalid, the app uses the explicit geometry heuristic fallback. A prospective independent set is still needed before relying on the model in client work.
+The base training refuses fewer than 30 development cases. The calibration set must contain at least 50 distinct customers and the external validation set at least 100 distinct customers. These are early engineering gates, not a statistical guarantee that the model is production ready. Same-customer rows are kept within one dataset, and the three dataset case IDs must not overlap.
 
-Model input feature order is fixed and must remain aligned between Python and Kotlin:
+The output JSON is a **candidate only**. Review the grouped holdout and external metrics, confirm that the validation population resembles intended salons/customers, investigate errors and subgroup performance, and have a qualified reviewer sign off. Only then may you explicitly mark the candidate reviewed:
 
-1. `face_width_height_ratio`
-2. `interocular_face_width_ratio`
-3. `jaw_face_width_ratio`
-4. `brow_eye_distance_ratio`
-5. `brow_asymmetry_ratio`
-6. `eye_line_tilt`
-7. `thickness`
-8. `length`
-9. `arch`
-10. `style_soft` (0/1)
-11. `style_defined` (0/1)
+```bash
+python ml/train_brow_ranker.py development.csv \
+  --calibration-csv calibration.csv \
+  --external-validation-csv external_validation.csv \
+  --mark-reviewed-after-human-review \
+  --output app/src/main/assets/brow_ranker.json
+```
 
-Rating 4–5 is considered a positive preference label and rating 1–3 a negative label. `selected` is retained for audit/analysis but is not used as a model input or target. This is an exploratory preference model, not a model of clinical outcome and not proof that a particular brow shape is objectively best. A minimum of 30 cases is only a software guardrail. For commercial claims, gather a substantially larger dataset, evaluate by salon and demographic strata where appropriate, and conduct a prospective external test before deployment.
+That command also requires the external data to meet preliminary engineering gates: ROC AUC at least 0.60, Brier score better than the constant-prevalence baseline and 10-bin expected calibration error at most 0.10. Those cutoffs are screening rules, not industry standards and not proof of fairness or aesthetic correctness. A model JSON must not be marked reviewed just to enable the app.
 
-## 2. Curvature data analysis
+Only a version-2 JSON explicitly marked `release_approved: true`, with a separate Platt calibrator and passing external metrics, will be loaded by Android. The live percentage estimates the probability that a candidate receives a 4–5 rating under the collected feedback process. It does **not** mean objective beauty, universal suitability, or a guaranteed treatment result. When no reviewed model is present, the app continues to use geometric reference scores and clearly labels them as such.
+
+The target label is rating 4–5 versus 1–3. The `selected` field remains available for audit but is not an input to the model. A selected candidate and a high rating are related but not interchangeable. Before commercial use, evaluate top-k selection, performance across face shapes and capture conditions, subgroup errors, confidence intervals, data drift and the way ratings were collected.
+
+## 2. Commercial data licensing and privacy
+
+Do not assume a public face dataset can be used commercially. The official CelebAMask-HQ agreement, for example, limits its images and derived data to non-commercial research and prohibits commercial exploitation. See the [official dataset page](https://mmlab.ie.cuhk.edu.hk/projects/CelebA/CelebAMask_HQ.html). Use it for this product only if the rights holder grants separate written permission.
+
+Prefer consented, purpose-limited salon data with documented authorization for training, validation, deployment and the target market. Keep a dataset register with source, permission/license, permitted uses, collection date, annotation version, retention and deletion status. Downloadable does not mean commercially licensed.
+
+## 3. Curvature measurement and interval analysis
 
 Run:
 
 ```bash
-python ml/analyze_curvature.py /path/to/brow_curvature_calibration.csv --output curvature_summary.csv
+python ml/analyze_curvature.py brow_curvature_calibration.csv --output curvature_summary.csv
 ```
 
-The report gives region-level measurement count, distinct anonymous case count, mean, median, 10th/90th percentiles, observed range, a case-clustered bootstrap confidence interval for the mean, and estimated circular-arc radii when available. The P10–P90 measurement interval is descriptive, not an anatomical guarantee or individual prediction interval. The estimated radius assumes a local circular arc and is not a three-dimensional reconstruction. Establish a standardized measurement protocol, repeatability limits, and an independent validation set before embedding any region-specific correction factors in clinical practice.
+For each region, the script first computes the mean repeated measurements within each anonymous customer. Population summaries and the P10–P90 empirical interval are then calculated from those **case-level means**, so a customer with extra repeated measurements cannot dominate the interval. It also reports the number of raw measurements, number of cases, observed case-level range, bootstrap 95% confidence interval for the population mean, and case-level radius summaries when available.
 
-## 3. Measurement geometry
+The P10–P90 interval is a descriptive central range of the observed customers. It is not a guaranteed anatomical bound, an individual prediction interval, or by itself a correction recommendation. The bootstrap interval refers to uncertainty in the population mean, not the range that will contain 90% of individual customers. Legacy CSV files without a `case_id` cannot group repeated measurements and are explicitly warned about.
 
 The directly measured ratio is
 
-`k = measured surface arc length / measured chord length`.
+`k = measured skin-surface arc length / measured chord length`.
 
-For an ideal circular arc, if the chord (c) and radius (R) are known, then:
+For an ideal circular arc with chord (c) and radius (R), (s = 2R\arcsin(c/(2R))) and (k=s/c). Real brow ridges are not perfect circular arcs. A single frontal photograph or MediaPipe relative-z values do not provide true millimetre-scale 3D geometry.
 
-`s = 2 R arcsin(c / (2 R))`
-
-and `k = s / c`. Real brow ridges are not perfect circular arcs, and a single frontal photograph does not identify the depth or curvature. Do not infer a universal (R) or universal correction interval from the photo alone.
-
+Follow [CURVATURE_PROTOCOL.md](CURVATURE_PROTOCOL.md): consistent endpoints, repeat measurements, customer-level grouping, staff-to-staff repeatability checks, and an independent 3D or reliable physical reference. Before any factor is embedded in normal printing, validate the expected coverage of the regional interval and measure actual stencil transfer errors on unseen customers.
 
 ## 4. Brow-region segmentation
 
-The Android app supports three segmentation paths, in this priority order:
+The Android app supports three segmentation paths:
 
-- **Customer trained eyebrow model**: when `app/src/main/assets/brow_segmentation.tflite` exists and matches float32 input `[1,256,256,3]` (RGB normalized to 0–1) and output `[1,256,256,1]` (sigmoid probabilities), it is preferred. This is the model produced by the training script below.
-- **Built in EasyPortrait BiSeNet face parsing model**: the Android CI build downloads `bisenet_fp.onnx` from [EasyPortrait-ONNX](https://huggingface.co/sadzip/EasyPortrait-ONNX), renaming it to `faceparsing.onnx`. It consumes float32 `[1,3,384,384]` NCHW BGR pixels normalized with the model card's mean/std. The model card describes an 8 class taxonomy, but the downloaded ONNX file's actual CPU inference output has 19 channels `[1,19,384,384]`. To match the observed tensor, the Android implementation uses the common 19 class face parsing order where classes 6 and 7 are the left and right brows. The CI workflow runs actual inference and checks the output tensor shape and finite values. The model file is approximately 13.4 MB. This metadata mismatch is why the upstream card alone is not treated as sufficient verification.
-- **Adaptive contrast fallback**: if neither model can be loaded or inference returns almost no brow pixels, the app estimates dark eyebrow pixels around the brow landmarks. It remains manually editable and is not a precise segmentation guarantee.
+- **Customer-trained eyebrow model**: when `app/src/main/assets/brow_segmentation.tflite` exists with float32 input `[1,256,256,3]` and output `[1,256,256,1]`, it is preferred.
+- **EasyPortrait face parsing model**: the Android CI downloads a compact 19-channel ONNX model, using the inferred common 19-class label map. Its exact eyebrow mapping still needs visual validation against professionally annotated salon photos.
+- **Adaptive contrast fallback**: if inference is unavailable or weak, the app estimates brow pixels around landmarks. It remains manually editable and is not a precise segmentation guarantee.
 
-**License and attribution:** the EasyPortrait model repository is labelled Apache-2.0, while the original model author states that the released models share the upstream project's CC BY-SA 4.0 variant licence. Preserve attribution and review the specific upstream licence terms before commercial redistribution. See [docs/MODEL_PROVENANCE.md](../docs/MODEL_PROVENANCE.md).
+No customer-specific segmentation model is shipped without a consented, professionally annotated dataset. See [MODEL_PROVENANCE.md](../docs/MODEL_PROVENANCE.md) for model source/license caveats and [PRODUCT_VALIDATION_CHECKLIST.md](../docs/PRODUCT_VALIDATION_CHECKLIST.md) for the test gates.
 
-### Collect and annotate data
+## 5. Remaining production gates
 
-1. Obtain specific consent to export and annotate facial photos. In the app, use **导出原始标注照片** only when the customer has agreed to this separate training use.
-2. Name source images by anonymous case, for example `CASE001_left.jpg` and `CASE001_right.jpg`. Do not use names, appointment numbers or phone numbers.
-3. Install optional tools with `python -m pip install -r ml/requirements-segmentation.txt`.
-4. Run `python ml/annotate_brow_masks.py --images /local/consented/photos --output /local/brow_dataset`. Select each brow ROI with margins similar to the app's landmark ROI, then outline visible eyebrow hair/body with the polygon editor. Review masks manually.
-5. The tool generates `images/`, `masks/` and `manifest.csv`. The manifest has `image,mask,case_id`. Same-client images must share one case ID to prevent data leakage between training and validation.
-
-### Train and export
-
-```bash
-python ml/train_brow_segmentation.py --dataset /local/brow_dataset --output ml/artifacts/brow_segmentation_candidate.tflite --metrics ml/brow_segmentation_metrics.json
-```
-
-By default the output is a candidate model and is **not** copied into the Android app. After reviewing masks and holdout examples, an initial internal screening step can be run with:
-
-```bash
-python ml/train_brow_segmentation.py --dataset /local/brow_dataset --output ml/artifacts/brow_segmentation_candidate.tflite --metrics ml/brow_segmentation_metrics.json --promote-to-app --min-test-dice 0.70
-```
-
-The second command only copies the model to app assets if the untouched grouped test Dice is at least 0.70. The model-selection validation split is separate from this test split, so the final test cases are not used for early stopping. Passing this internal gate still does not mean the model is commercially validated. The training script uses a compact U-Net, binary-cross-entropy plus Dice loss, aligned paired augmentations, and three case-grouped partitions for training, early-stopping validation and final internal testing. It refuses to train fewer than 50 distinct cases by default. This is only an initial exploratory floor, not a sufficient commercial sample-size claim. Review the masks and test examples, including false positives and false negatives, before committing a model. Validate on independently collected clients, skin tones, makeup, lighting and camera conditions and then on the target Android device.
-
-No customer-specific eyebrow segmentation model is shipped because no authorized, professionally annotated client dataset was supplied. The CI build downloads the EasyPortrait general face parser for a compact on-device starting mask. It has not been validated on salon clients, lighting/makeup variations, or the target phone. Review and comply with the upstream attribution/share-alike licence.
-
-## 5. Regional curvature correction in printing
-
-The print dialog can apply experimental regional length factors only when all eight regions for the current anonymous case have been measured. The factors are per-region medians of `arc_mm / chord_mm` and are capped at 1.4 when applied to adjacent landmark segments. The print page marks the correction as experimental.
-
-This correction is a regional length adjustment. It is not full 3D reconstruction or a validated physical unwrapping of an individual's brow ridge. The measurement protocol and independent validation requirements are in [CURVATURE_PROTOCOL.md](CURVATURE_PROTOCOL.md).
-
-## 6. Remaining production gates
-
-- No trained ranking model is present until real feedback data is collected and a model JSON is generated.
-- No customer-specific segmentation model is present until authorized images and professionally reviewed masks are collected. The current build includes the EasyPortrait pretrained parser, subject to the attribution/share-alike conditions above.
-- The experimental regional correction must be evaluated against a measured surface model and physical stencil transfer, with print-scale checks on each printer model.
-- The Android app must complete OPPO Find X7 and target-printer field tests, crash/memory checks, and a signed release build.
+- Real, consented and professionally reviewed customer feedback and brow-mask annotations.
+- Separate calibration and independent validation sets with disjoint customer IDs.
+- Measured 3D/physical reference and stencil-transfer validation by region.
+- OPPO Find X7 and each target printer tested in person, including 20 mm scale accuracy, no auto-fit setting, page margins, orientation and cancellation.
+- Device performance/crash review, privacy-policy review, third-party license review and a signed release build.
