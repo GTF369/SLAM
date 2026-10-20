@@ -1042,8 +1042,12 @@ class MainActivity : AppCompatActivity() {
                     put("arch", params.arch.toDouble())
                     put("rating", ratingBar.progress + 1)
                     put("selected", selected.isChecked)
-                    put("face_width_height_ratio", features.first.toDouble())
-                    put("brow_asymmetry_ratio", features.second.toDouble())
+                    put("face_width_height_ratio", features.widthHeightRatio.toDouble())
+                    put("interocular_face_width_ratio", features.interocularFaceWidthRatio.toDouble())
+                    put("jaw_face_width_ratio", features.jawFaceWidthRatio.toDouble())
+                    put("brow_eye_distance_ratio", features.browEyeDistanceRatio.toDouble())
+                    put("brow_asymmetry_ratio", features.browAsymmetryRatio.toDouble())
+                    put("eye_line_tilt", features.eyeLineTilt.toDouble())
                     put("timestamp", System.currentTimeMillis())
                 }
                 dataset.put(item)
@@ -1064,7 +1068,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val csv = buildString {
-            append("case_id,style,thickness,length,arch,rating,selected,face_width_height_ratio,brow_asymmetry_ratio,timestamp\n")
+            append("case_id,style,thickness,length,arch,rating,selected,face_width_height_ratio,interocular_face_width_ratio,jaw_face_width_ratio,brow_eye_distance_ratio,brow_asymmetry_ratio,eye_line_tilt,timestamp\n")
             for (i in 0 until records.length()) {
                 val row = records.optJSONObject(i) ?: continue
                 append(row.optString("case_id")).append(',')
@@ -1075,7 +1079,11 @@ class MainActivity : AppCompatActivity() {
                 append(row.optInt("rating")).append(',')
                 append(row.optBoolean("selected")).append(',')
                 append(row.optDouble("face_width_height_ratio")).append(',')
+                append(row.optDouble("interocular_face_width_ratio")).append(',')
+                append(row.optDouble("jaw_face_width_ratio")).append(',')
+                append(row.optDouble("brow_eye_distance_ratio")).append(',')
                 append(row.optDouble("brow_asymmetry_ratio")).append(',')
+                append(row.optDouble("eye_line_tilt")).append(',')
                 append(row.optLong("timestamp")).append('\n')
             }
         }
@@ -1298,6 +1306,15 @@ private data class BrowRecommendation(
     val reason: String
 )
 
+private data class BrowFaceMeasurements(
+    val widthHeightRatio: Float,
+    val interocularFaceWidthRatio: Float,
+    val jawFaceWidthRatio: Float,
+    val browEyeDistanceRatio: Float,
+    val browAsymmetryRatio: Float,
+    val eyeLineTilt: Float
+)
+
 /**
  * An explainable geometric baseline for prototyping candidate ordering.
  * Scores are not probabilities and must not be presented as validated AI output.
@@ -1312,16 +1329,33 @@ private object BrowRecommendationEngine {
     private var loadAttempted = false
     private var trainedModel: TrainedModel? = null
 
-    fun measurements(points: List<PointF>): Pair<Float, Float> {
-        if (points.size <= 454) return 0f to 0f
-        val faceWidth = distance(points[234], points[454])
+    fun measurements(points: List<PointF>): BrowFaceMeasurements {
+        if (points.size <= 454) return BrowFaceMeasurements(0f, 0f, 0f, 0f, 0f, 0f)
+        val faceWidth = distance(points[234], points[454]).coerceAtLeast(1f)
         val faceHeight = distance(
             points.getOrNull(10) ?: points[234],
             points.getOrNull(152) ?: points[454]
         ).coerceAtLeast(1f)
-        val ratio = faceWidth / faceHeight
+        val interocular = if (points.size > 263) distance(points[33], points[263]) else 0f
+        val jawWidth = if (points.size > 397) distance(points[172], points[397]) else faceWidth * 0.8f
+        val browEyeDistance = if (points.size > 386) {
+            (abs(points[105].y - points[159].y) + abs(points[334].y - points[386].y)) / 2f / faceHeight
+        } else 0f
         val asymmetry = if (points.size > 334) abs(points[105].y - points[334].y) / faceHeight else 0f
-        return ratio to asymmetry
+        val eyeTilt = if (points.size > 263) {
+            (Math.toDegrees(kotlin.math.atan2(
+                (points[263].y - points[33].y).toDouble(),
+                (points[263].x - points[33].x).toDouble()
+            )) / 90.0).toFloat()
+        } else 0f
+        return BrowFaceMeasurements(
+            faceWidth / faceHeight,
+            interocular / faceWidth,
+            jawWidth / faceWidth,
+            browEyeDistance,
+            asymmetry,
+            eyeTilt
+        )
     }
 
     fun sourceLabel(context: Context): String =
@@ -1342,8 +1376,12 @@ private object BrowRecommendationEngine {
         if (model != null) {
             return templates.map { option ->
                 val x = floatArrayOf(
-                    features.first,
-                    features.second,
+                    features.widthHeightRatio,
+                    features.interocularFaceWidthRatio,
+                    features.jawFaceWidthRatio,
+                    features.browEyeDistanceRatio,
+                    features.browAsymmetryRatio,
+                    features.eyeLineTilt,
                     option.params.thickness,
                     option.params.length,
                     option.params.arch,
@@ -1353,8 +1391,8 @@ private object BrowRecommendationEngine {
                 option.copy(score = (predict(model, x) * 100f).roundToInt().coerceIn(0, 100))
             }.sortedByDescending { it.score }
         }
-        val shapeSignal = ((features.first - 0.72f) / 0.18f).coerceIn(-1f, 1f)
-        val penalty = (features.second * 35f).coerceIn(0f, 5f)
+        val shapeSignal = ((features.widthHeightRatio - 0.72f) / 0.18f).coerceIn(-1f, 1f)
+        val penalty = (features.browAsymmetryRatio * 35f).coerceIn(0f, 5f)
         return listOf(
             templates[0].copy(score = (82f - abs(shapeSignal) * 3.5f - penalty).roundToInt().coerceIn(60, 95)),
             templates[1].copy(score = (78f + (if (shapeSignal < 0f) -shapeSignal * 6f else -shapeSignal * 2f) - penalty * 0.6f).roundToInt().coerceIn(60, 95)),
@@ -1371,7 +1409,7 @@ private object BrowRecommendationEngine {
             val meansJson = root.getJSONArray("means")
             val scalesJson = root.getJSONArray("scales")
             val coefficientsJson = root.getJSONArray("coefficients")
-            if (meansJson.length() != 7 || scalesJson.length() != 7 || coefficientsJson.length() != 7) return null
+            if (meansJson.length() != 11 || scalesJson.length() != 11 || coefficientsJson.length() != 11) return null
             trainedModel = TrainedModel(
                 FloatArray(7) { meansJson.getDouble(it).toFloat() },
                 FloatArray(7) { scalesJson.getDouble(it).toFloat().let { scale -> if (abs(scale) < 1e-8f) 1f else scale } },
