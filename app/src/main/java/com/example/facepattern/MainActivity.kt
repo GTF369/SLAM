@@ -58,6 +58,8 @@ import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.exifinterface.media.ExifInterface
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.core.BaseOptions
@@ -313,6 +315,18 @@ class MainActivity : AppCompatActivity() {
             bottomMargin = dp(8)
         })
         setContentView(root)
+        // Android 15/16 enforces edge-to-edge layout for newer target SDKs.
+        // Keep the studio controls above the system navigation area.
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, windowInsets ->
+            val systemBars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
+            val params = scroll.layoutParams as FrameLayout.LayoutParams
+            params.leftMargin = dp(8) + systemBars.left
+            params.rightMargin = dp(8) + systemBars.right
+            params.bottomMargin = dp(8) + systemBars.bottom
+            scroll.layoutParams = params
+            windowInsets
+        }
+        ViewCompat.requestApplyInsets(root)
     }
 
     private fun addTextLabel(parent: LinearLayout, text: String) {
