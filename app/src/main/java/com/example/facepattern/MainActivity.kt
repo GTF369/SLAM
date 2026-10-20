@@ -785,7 +785,7 @@ private object BrowRenderer {
     }
 
     private fun drawOne(canvas: Canvas, points: List<PointF>, ids: IntArray, params: BrowParams, outlineOnly: Boolean) {
-        val valid = ids.mapNotNull { points.getOrNull(it) }.filter { it.x.isFinite() && it.y.isFinite() }
+        val valid = ids.map { index -> points.getOrNull(index) }.filterNotNull().filter { it.x.isFinite() && it.y.isFinite() }
         if (valid.size < 4) return
         val nose = points.getOrNull(1) ?: return
         val inner = valid.minByOrNull { abs(it.x - nose.x) } ?: return
@@ -879,7 +879,7 @@ private object BrowRenderer {
         if (points.size < 455) return null
         val full = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         drawBrows(Canvas(full), points, params, outlineOnly = true)
-        val browPoints = browSets.flatMap { ids -> ids.mapNotNull { points.getOrNull(it) } }
+        val browPoints = browSets.flatMap { ids -> ids.map { index -> points.getOrNull(index) }.filterNotNull() }
         if (browPoints.isEmpty()) {
             full.recycle()
             return null
