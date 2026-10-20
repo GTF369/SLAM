@@ -68,6 +68,7 @@ import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 private data class BrowParams(
@@ -86,6 +87,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var liveControls: LinearLayout
     private lateinit var designControls: LinearLayout
     private lateinit var plansRow: LinearLayout
+    private lateinit var recommendationRow: LinearLayout
     private lateinit var pauseButton: Button
     private lateinit var thicknessSeek: SeekBar
     private lateinit var lengthSeek: SeekBar
@@ -153,12 +155,12 @@ class MainActivity : AppCompatActivity() {
         panel.addView(liveControls)
 
         designControls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        addTextLabel(designControls, "选择基础眉形 · 当前为可调原型，尚未训练真实 AI 适配度模型")
-        addButtonRow(designControls, listOf(
-            "自然款" to { animateTo(BrowParams(1.0f, 1.0f, 0.92f, 0)) },
-            "柔和款" to { animateTo(BrowParams(0.82f, 0.94f, 0.72f, 1)) },
-            "英气款" to { animateTo(BrowParams(1.18f, 1.06f, 1.22f, 2)) }
-        ))
+        addTextLabel(designControls, "候选方案按面部比例几何规则初排，显示参考分，不等同于真实 AI 概率")
+        recommendationRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        designControls.addView(recommendationRow)
         thicknessSeek = addSlider(designControls, "粗细", 100, 50) { p ->
             params = params.copy(thickness = 0.55f + p / 100f * 0.90f)
             browView.setParams(params)
@@ -452,7 +454,20 @@ class MainActivity : AppCompatActivity() {
                                 status.text = failure ?: "拍摄失败，请重试"
                                 Toast.makeText(this@MainActivity, status.text, Toast.LENGTH_LONG).show()
                             } else {
-                                enterDesignMode(photo, points)
+                                val warning = photoQualityWarning(photo, points)
+                                if (warning == null) {
+                                    enterDesignMode(photo, points)
+                                } else {
+                                    AlertDialog.Builder(this@MainActivity)
+                                        .setTitle("拍摄质量提醒")
+                                        .setMessage(warning + "\n\n继续使用可能增加眉形定位和打印拓描误差。")
+                                        .setNegativeButton("重新拍摄") { _, _ ->
+                                            photo.recycle()
+                                            retakePhoto()
+                                        }
+                                        .setPositiveButton("仍然使用") { _, _ -> enterDesignMode(photo, points) }
+                                        .show()
+                                }
                             }
                         }
                     } ?: run {
@@ -507,6 +522,48 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun photoQualityWarning(photo: Bitmap, points: List<PointF>): String? {
+        if (points.size <= 454) return "关键点不足，无法确认照片质量。"
+        val leftCheek = points[234]
+        val rightCheek = points[454]
+        val faceWidth = hypot((rightCheek.x - leftCheek.x).toDouble(), (rightCheek.y - leftCheek.y).toDouble()).toFloat()
+        val centerX = (leftCheek.x + rightCheek.x) / 2f
+        val warnings = mutableListOf<String>()
+        if (faceWidth < photo.width * 0.28f) warnings.add("脸部在照片中偏小，请让顾客靠近一些后重新拍摄")
+        if (abs(centerX - photo.width / 2f) > photo.width * 0.16f) warnings.add("脸部没有位于画面中央")
+        if (points.size > 263) {
+            val leftEye = points[33]
+            val rightEye = points[263]
+            val rollDegrees = Math.toDegrees(kotlin.math.atan2(
+                (rightEye.y - leftEye.y).toDouble(),
+                (rightEye.x - leftEye.x).toDouble()
+            )).toFloat()
+            if (abs(rollDegrees) > 12f) warnings.add("头部有明显倾斜，请尽量让双眼连线接近水平")
+        }
+        return warnings.takeIf { it.isNotEmpty() }?.joinToString("\n")
+    }
+
+    private fun refreshRecommendations(points: List<PointF>) {
+        recommendationRow.removeAllViews()
+        val ranked = BrowRecommendationEngine.rank(points)
+        ranked.forEach { recommendation ->
+            val button = Button(this).apply {
+                text = "${recommendation.name}\n参考分 ${recommendation.score}"
+                textSize = 11f
+                minHeight = dp(52)
+                setPadding(dp(2), 0, dp(2), 0)
+                contentDescription = recommendation.reason
+                setOnClickListener {
+                    Toast.makeText(this@MainActivity, recommendation.reason, Toast.LENGTH_SHORT).show()
+                    animateTo(recommendation.params)
+                }
+            }
+            recommendationRow.addView(button, LinearLayout.LayoutParams(0, dp(54), 1f).apply {
+                setMargins(dp(2), dp(2), dp(2), dp(4))
+            })
+        }
+    }
+
     private fun enterDesignMode(photo: Bitmap, photoPoints: List<PointF>) {
         stopTransition()
         capturedPhoto?.recycle()
@@ -521,6 +578,7 @@ class MainActivity : AppCompatActivity() {
         history.clear()
         browView.setParams(params)
         syncSliders()
+        refreshRecommendations(photoPoints)
         cameraProvider?.unbindAll()
         imageCapture = null
         landmarker?.close()
@@ -1056,6 +1114,50 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+}
+
+private data class BrowRecommendation(
+    val name: String,
+    val score: Int,
+    val params: BrowParams,
+    val reason: String
+)
+
+/**
+ * An explainable geometric baseline for prototyping candidate ordering.
+ * Scores are not probabilities and must not be presented as validated AI output.
+ */
+private object BrowRecommendationEngine {
+    fun rank(points: List<PointF>): List<BrowRecommendation> {
+        if (points.size <= 454) return defaultSuggestions()
+        val left = points[234]
+        val right = points[454]
+        val top = points.getOrNull(10) ?: return defaultSuggestions()
+        val chin = points.getOrNull(152) ?: return defaultSuggestions()
+        val faceWidth = distance(left, right)
+        val faceHeight = distance(top, chin).coerceAtLeast(1f)
+        val widthHeightRatio = faceWidth / faceHeight
+        // This is only a tunable heuristic signal, not a clinical or population norm.
+        val shapeSignal = ((widthHeightRatio - 0.72f) / 0.18f).coerceIn(-1f, 1f)
+        val browHeightDifference = if (points.size > 334) abs(points[105].y - points[334].y) / faceHeight else 0f
+        val asymmetryPenalty = (browHeightDifference * 35f).coerceIn(0f, 5f)
+        val naturalScore = (82f - abs(shapeSignal) * 3.5f - asymmetryPenalty).roundToInt().coerceIn(60, 95)
+        val softScore = (78f + if (shapeSignal < 0f) -shapeSignal * 6f else -shapeSignal * 2f - asymmetryPenalty * 0.6f).roundToInt().coerceIn(60, 95)
+        val definedScore = (76f + if (shapeSignal > 0f) shapeSignal * 7f else shapeSignal * 2f - asymmetryPenalty * 0.4f).roundToInt().coerceIn(60, 95)
+        return listOf(
+            BrowRecommendation("自然款", naturalScore, BrowParams(1.0f, 1.0f, 0.92f, 0), "自然款：较保守的参数基线，仍需纹绣师确认"),
+            BrowRecommendation("柔和款", softScore, BrowParams(0.82f, 0.94f, 0.72f, 1), "柔和款：较低粗细与弧度的参数预设"),
+            BrowRecommendation("立体款", definedScore, BrowParams(1.18f, 1.06f, 1.22f, 2), "立体款：较高粗细与弧度的参数预设")
+        ).sortedByDescending { it.score }
+    }
+
+    private fun defaultSuggestions() = listOf(
+        BrowRecommendation("自然款", 82, BrowParams(1.0f, 1.0f, 0.92f, 0), "自然款：默认参数"),
+        BrowRecommendation("柔和款", 78, BrowParams(0.82f, 0.94f, 0.72f, 1), "柔和款：默认参数"),
+        BrowRecommendation("立体款", 76, BrowParams(1.18f, 1.06f, 1.22f, 2), "立体款：默认参数")
+    )
+    private fun distance(a: PointF, b: PointF): Float =
+        hypot((a.x - b.x).toDouble(), (a.y - b.y).toDouble()).toFloat()
 }
 
 private class BrowDesignView(context: Context) : View(context) {
