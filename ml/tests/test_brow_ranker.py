@@ -33,6 +33,10 @@ def synthetic_rows(case_count=12):
                 "brow_eye_distance_ratio": "0.04",
                 "brow_asymmetry_ratio": "0.01",
                 "eye_line_tilt": "0.0",
+                "native_brow_area_fraction": "0.12",
+                "native_brow_side_imbalance": "0.02",
+                "native_brow_mask_available": "1",
+                "native_shape_mode": "1",
             })
     return rows
 
@@ -40,7 +44,7 @@ def synthetic_rows(case_count=12):
 class BrowRankerTests(unittest.TestCase):
     def test_build_matrix_labels_and_groups(self):
         x, y, groups = build_matrix(synthetic_rows())
-        self.assertEqual(x.shape, (24, 11))
+        self.assertEqual(x.shape, (24, 15))
         self.assertEqual(set(np.unique(y)), {0, 1})
         self.assertEqual(len(np.unique(groups)), 12)
 
