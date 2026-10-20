@@ -1782,6 +1782,14 @@ private object BrowRenderer {
         // bitmap the size of the whole face photo. This reduces peak memory use.
         val template = Bitmap.createBitmap(right - left, bottom - top, Bitmap.Config.ARGB_8888)
         drawBrows(Canvas(template), shiftedPoints, params, outlineOnly = true)
-        return template
+        // The customer-facing preview is mirrored like a selfie. Flip only the
+        // physical stencil back so left/right anatomy maps correctly on the customer.
+        val unmirrored = Bitmap.createBitmap(
+            template, 0, 0, template.width, template.height,
+            Matrix().apply { postScale(-1f, 1f, template.width / 2f, template.height / 2f) },
+            true
+        )
+        if (unmirrored !== template) template.recycle()
+        return unmirrored
     }
 }
