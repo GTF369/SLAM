@@ -1,56 +1,51 @@
-# 眉形设计助手产品验证门槛
+# Brow Design Assistant: production validation checklist
 
-这份清单用于区分“代码已实现”“内部测试通过”和“可面向顾客正式发布”。没有真实数据或目标设备结果的项目应保持为未通过，不能用成功编译替代。
+Use this list to distinguish code completion, automated tests, device testing and customer-facing readiness. A successful build does not replace a real-device or physical-transfer test.
 
-## A. AI 眉形排序
+## A. Preference recommendation
 
-- [ ] 由专业纹绣师定义各类设计标签和不可接受的方案，形成标注指南。
-- [ ] 在取得适当授权的前提下，采集不同顾客对多个候选方案的评分和最终选择。
-- [ ] 使用匿名顾客 ID 将同一顾客的所有记录放进同一数据分组，防止训练/测试泄漏。
-- [ ] 先固定基线（例如几何规则和纹绣师人工排序），再评估 AI 模型。
-- [ ] 在从未参与训练的顾客上报告 Top 1/Top 3 选择命中率、评分误差、排序指标和置信区间。
-- [ ] 分析不同光照、妆容、肤色、面部形态和左右眉不对称场景的失败例。
-- [ ] 只有在外部验证优于预先规定的基线且经纹绣师审核后，才启用模型结果。不能把未经校准的 sigmoid 分数称为经验证的真实概率。
+- [ ] Collect customer feedback only with specific, recorded authorization and stable anonymous customer IDs.
+- [ ] Provide a clear annotation guide for ratings and the final selected design. A selected candidate and a 4–5 rating must remain distinct labels.
+- [ ] Keep development, calibration and external validation customers disjoint.
+- [ ] Compare against a fixed geometry-rule baseline and report case-level Top 1/Top 3 preference, ROC AUC, Brier score, calibration error and uncertainty.
+- [ ] Check relevant subgroups and capture conditions, including lighting, makeup, brow density, asymmetry and different face proportions.
+- [ ] Never call geometry-rule reference scores probabilities. The app only displays percentage preference estimates for a version-2 model that has separate calibration, passing external metrics and an explicit human-review approval flag.
+- [ ] The current script's 30 development / 50 calibration / 100 external-customer minimums and metric thresholds are engineering screens, not statistical guarantees. Determine final sample size from the intended claims and expected error bounds.
 
-## B. 原生眉毛分割
+## B. Natural eyebrow segmentation
 
-- [ ] 使用授权照片建立人工标注集，并由至少两名受训标注者对一部分样本重复标注，估计标注一致性。
-- [ ] 训练/验证/测试按顾客分组，不能让同一顾客的左右眉或多次拍照跨越数据集。
-- [ ] 单独报告 Dice、IoU、边界 F-score、假阳性/假阴性，以及眉头/眉身/眉峰/眉尾的区域表现。
-- [ ] 在眼影、眉笔、浓淡不同原生眉毛、遮挡、强/弱光和左右脸不对称场景下检查边界。
-- [ ] 由纹绣师确认模型输出的边界是否足够用于设计。用户应可编辑分割结果，且能够撤销和恢复编辑。
-- [ ] 内部初始工程目标可考虑外部测试 Dice ≥ 0.85，但这不是行业强制标准，也不能单凭一个 Dice 数值决定安全性。应在开始测试前由专业团队确认允许的边界误差和错误成本。
-- [ ] 只有经过独立外部验证的模型才复制到 app/src/main/assets/brow_segmentation.tflite，并在真机上测试耗时、内存及失败恢复。
+- [ ] Build a consented annotation set, with a portion independently marked by at least two trained annotators.
+- [ ] Group splits by customer so a customer's two brows or repeated photographs cannot straddle datasets.
+- [ ] Report Dice, IoU, boundary F-score, false-positive/false-negative rates and region-specific performance.
+- [ ] Test makeup, skin/brow color, lighting, occlusion and uneven natural brows.
+- [ ] Visually verify the bundled parser's label mapping against the annotated salon set. A tensor shape check is not an accuracy test.
+- [ ] Define clinically/practically acceptable contour error before test evaluation. An internal Dice threshold alone is not a release decision.
 
-## C. 三维眉弓和打印修正
+## C. 2D photo to 3D brow-arch correction
 
-- [ ] 制定测量 SOP，明确每个眉区的端点、弧长路径、弦长定义、测量工具、姿态、重复次数及异常排除标准。
-- [ ] 每个区域进行重复测量和测量人员间一致性分析。
-- [ ] 使用独立的三维扫描/经标定多视角重建或可靠的实物测量作为参照，不能把单张照片的面部关键点深度当成真实毫米级曲率。
-- [ ] 按匿名顾客分组估计区间，并在独立顾客上验证区间是否覆盖真实误差。报告均值区间与个体预测区间时必须明确二者区别。
-- [ ] 将二维设计、区域长度修正后的模板、打印稿和实际眉弓上的转印结果逐段比较，报告左右眉和各区域的长度/位置误差。
-- [ ] 对每款打印机/纸张/驱动组合验证 20 mm 校准框。打印比例的初始工程目标可考虑误差不超过 ±1%，但必须先确认适用的测量精度与门店工作要求。
-- [ ] 没有完成三维参照验证前，区域修正只作为研究模式，不得暗示为自动 3D 重建或保证贴合的功能。
+- [ ] Standardize how each of eight regions is measured, including endpoints, arc path, chord definition, tool, pose, repeated measurements and invalid samples.
+- [ ] Assess within-staff and between-staff measurement repeatability.
+- [ ] Use an independent 3D scan, calibrated multiview reconstruction or reliable physical measurement as reference. Do not treat single-image landmarks or relative MediaPipe z values as millimetres.
+- [ ] Compute summaries after averaging repeats within each anonymous customer. Report the case-level P10–P90 empirical range separately from the bootstrap confidence interval of the mean.
+- [ ] Reserve customers for independent coverage validation. Evaluate whether regional prediction ranges cover actual surface-length discrepancy at the stated rate.
+- [ ] Compare the design, corrected template, printed stencil and actual transfer on skin by region and side.
+- [ ] No fixed correction interval should be activated by default until independent measurement and transfer accuracy is demonstrated.
 
-## D. Android 设备与打印机验收
+## D. Android and printer
 
-- [ ] OPPO Find X7 真机：摄像头许可、冷启动、连续拍摄、旋转/前后切换场景、内存压力、长时间使用和应用后台恢复。
-- [ ] 至少在目标 Android 系统版本下跑完整设计、保存、重拍、清除本地数据和导出流程。
-- [ ] 测试高清照片、不同宽高比、低内存状态、Landmarker 初始化失败、模型文件缺失/损坏和打印取消。
-- [ ] 在每款目标打印机上验证实际大小、无自动缩放、校准框、A4 页面边距、单页完整性和左右方向。
-- [ ] 完成自动化测试、真机回归、崩溃日志审查和发布前回归测试。
+- [ ] Test OPPO Find X7 camera permission, capture, repeated use, background/foreground, rotation, memory pressure and low-light warnings.
+- [ ] Complete capture → segmentation review → edit → undo/pause → save/compare → export → print flow on target Android versions.
+- [ ] Test missing/corrupt models, landmark initialization errors, extreme image sizes, print cancellation and state restoration.
+- [ ] Test each intended printer model / driver / paper combination. Verify 20 mm calibration square, actual template dimensions, orientation, margins, no fit-to-page scaling and transfer alignment.
+- [ ] Review logs, crash reports and accessibility/usability with practicing artists.
 
-## E. 发布与隐私
+## E. Privacy, license and release
 
-- [ ] 为产品确认正式名称、应用 ID、运营主体、支持邮箱、图标、版本政策和发布渠道。
-- [ ] 填写并审查 docs/PRIVACY_POLICY_DRAFT.md，发布隐私政策网址和数据删除说明。
-- [ ] 生成公司/运营主体控制的长期 upload keystore，并把 Base64、密码、alias 存入 GitHub Actions Secrets。不要提交密钥文件到仓库。
-- [ ] 从 Actions → Build signed Android release 运行签名发布工作流，验证 AAB/APK 签名及 Play Console 上传。
-- [ ] 完成第三方模型/库许可证审计、SDK 目标 API、权限、数据安全表单、商店截图和支持流程。
-- [ ] 以实际发布签名进行端到端安装/升级测试，不要把 debug APK 当成正式商用发布包。
+- [ ] Verify consent language, retention, access/deletion, and the privacy-policy URL with the operating entity and target-market counsel.
+- [ ] Complete third-party model and library license review, including the EasyPortrait upstream license conditions.
+- [ ] Configure a company-controlled release signing key in repository secrets only, never committed to source.
+- [ ] Build and test a signed release package and its upgrade path. A debug APK is not a commercial release artifact.
 
-## 当前已知状态
+## Status before in-person validation
 
-代码仓库已有：本地眉区自适应预分割和触控补画/擦除、可选 TFLite 模型加载、分割数据标注/训练工具、顾客偏好模型训练流程、按匿名顾客分组的曲率分析、实验性区域长度修正、照片/数据本地导出、隐私政策草案和签名工作流。
-
-仍未能通过代码自动完成的部分包括：真实顾客标注数据采集、训练并独立验证两个 AI 模型、三维参照数据与转印误差实验、OPPO Find X7/指定打印机实测、发布签名密钥配置，以及运营主体的隐私政策审核。必须完成后几项，才能称为正式产品。
+The repository has on-device design/edit/plan workflows, model-assisted brow segmentation with manual correction, anonymous feedback export, a ranking-model training path, curvature-measurement export and grouped analysis, and print-scale correction. It does not contain real customer-trained ranking or segmentation weights. Device/printer behavior, actual stencil transfer accuracy and 3D curvature correction remain empirical acceptance items that code alone cannot establish.
