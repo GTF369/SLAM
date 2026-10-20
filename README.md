@@ -1,16 +1,43 @@
-# Face Pattern AR (Android)
+# 眉形设计助手（Android 原型）
 
-An Android prototype for placing a transparent pattern over a live face using ARCore Augmented Faces and OpenGL ES. Users can select a PNG/JPG, drag it, pinch to resize, rotate with two fingers, and reset the placement.
+本仓库是面向纹绣师的眉形设计与打印辅助 Android 原型，目标设备优先验证 OPPO Find X7。
 
-## Build
-The GitHub Actions workflow builds a debug APK on each push and on manual dispatch. Open **Actions → Build Android APK → Run workflow** (or push a commit), then download the `face-pattern-debug-apk` artifact from a successful run.
+## 当前功能
 
-For a local build, use JDK 17 and Gradle 8.9 with Android SDK platform 35 installed, then run `gradle assembleDebug`.
+- 使用 CameraX 前置摄像头拍摄高分辨率照片，并用 MediaPipe Face Landmarker 在静态照片上重新检测关键点。
+- 对照片构图给出基础质量提醒。
+- 按面部几何比例的可解释规则为自然款、柔和款和立体款生成参考分并排序。
+- 调整眉形粗细、长度与弧度，支持渐变预览、暂停、回撤以及同一顾客的多套方案对比。
+- 保存当前效果图至相册。
+- 通过 Android 打印框架输出眉形轮廓稿，输入实测瞳距进行初步比例换算，并附 20 mm 校准框。
+- 录入局部眉弓的实测表面弧长与直线弦长，计算修正系数，按区域保存记录并导出 CSV。
 
-## Device requirements
-- Android 7.0 (API 24) or later.
-- A device supported by ARCore with a working front-facing camera. ARCore availability varies by model and region.
-- Camera permission.
+## 运行与构建
 
-## Prototype notes
-This is an initial implementation. It renders a pattern in the local XY coordinates of the tracked face mesh, so the texture follows the mesh surface. The drag mapping is an approximate screen-to-face mapping, not calibrated ray/triangle picking. Camera texture orientation and placement should be validated on real devices. The current prototype does not save/export a composited photo or video and does not include production-level error reporting. It is not yet a tested release build.
+每次推送到 `main` 分支都会触发 GitHub Actions 构建调试 APK。打开 **Actions → Build Android APK**，进入最新成功的工作流，下载 `face-pattern-oppo-debug-apk` 工件。
+
+本地构建需要 JDK 17、Gradle 8.9 和 Android SDK Platform 35，执行：
+
+```bash
+gradle --no-daemon assembleDebug
+```
+
+## 重要限制
+
+1. 候选方案得分是便于验证界面流程的几何启发式参考分，并非训练后校准的 AI 概率。要建立真正的个性化推荐，需要在获得授权的前提下采集纹绣师标注、顾客偏好与方案结果，并完成训练和独立验证。
+2. 当前眉毛区域仍由少量面部关键点生成参数化轮廓，尚未完成对顾客原生眉毛的精细分割，也不保证最终描线一定符合专业审美。定型前必须由纹绣师确认。
+3. 单张正面照片无法唯一恢复眉弓真实三维曲率。曲率标定模块只记录实测弦长和表面弧长，帮助收集数据，不会自动估计每个顾客的三维曲面，也不会预设通用修正区间。
+4. 1:1 输出依赖照片尺度参照、实测瞳距、打印驱动设置及实际打印结果。请打印后测量 20 mm 校准框，确认尺寸无误后再用于拓描。当前尚未验证所有打印机型号。
+5. 本项目仍是调试原型，未完成 OPPO Find X7 真机全流程测试、临床/门店可用性验证或正式发布签名。请勿把未校验的输出作为不可逆的纹绣操作依据。
+
+## 曲率标定数据建议
+
+同一局部段需要同时测得直线弦长与皮肤表面弧长。修正系数定义为
+
+`k = 表面弧长 / 直线弦长`
+
+请按左/右眉头、眉身、眉峰、眉尾分区域记录，并记录顾客匿名编号、测量工具、测量人员、拍摄姿势与重复测量结果。正式确定人群区间前，应先制定统一测量协议并按顾客独立划分训练/验证样本，避免把同一顾客的多条测量同时放进两组导致泄漏。
+
+## 隐私与安全
+
+照片和曲率数据应在取得顾客适当授权后使用。原型不上传照片到服务器，照片暂存在应用缓存中，退出/重拍时会释放内存对象，临时拍摄文件在分析后删除。正式版本仍需补充案件级保存与删除控制、明确隐私告知、安全评估及数据保留政策。
