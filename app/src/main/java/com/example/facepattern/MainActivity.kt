@@ -1683,14 +1683,9 @@ private object BrowRenderer {
     }
 
     fun createTemplate(points: List<PointF>, params: BrowParams, width: Int, height: Int): Bitmap? {
-        if (points.size < 455) return null
-        val full = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        drawBrows(Canvas(full), points, params, outlineOnly = true)
+        if (points.size < 455 || width <= 0 || height <= 0) return null
         val browPoints = browSets.flatMap { ids -> ids.map { index -> points.getOrNull(index) }.filterNotNull() }
-        if (browPoints.isEmpty()) {
-            full.recycle()
-            return null
-        }
+        if (browPoints.isEmpty()) return null
         val faceWidth = if (points.size > 454) abs(points[454].x - points[234].x) else width * 0.35f
         val marginX = max(8f, faceWidth * 0.06f)
         val marginY = max(8f, faceWidth * 0.11f)
@@ -1698,8 +1693,11 @@ private object BrowRenderer {
         val top = (browPoints.minOf { it.y } - marginY).toInt().coerceIn(0, height - 1)
         val right = (browPoints.maxOf { it.x } + marginX).toInt().coerceIn(left + 1, width)
         val bottom = (browPoints.maxOf { it.y } + marginY).toInt().coerceIn(top + 1, height)
-        val cropped = Bitmap.createBitmap(full, left, top, right - left, bottom - top)
-        full.recycle()
-        return cropped
+        val shiftedPoints = points.map { point -> PointF(point.x - left, point.y - top) }
+        // Only allocate the small eyebrow region, not a full-resolution transparent
+        // bitmap the size of the whole face photo. This reduces peak memory use.
+        val template = Bitmap.createBitmap(right - left, bottom - top, Bitmap.Config.ARGB_8888)
+        drawBrows(Canvas(template), shiftedPoints, params, outlineOnly = true)
+        return template
     }
 }
