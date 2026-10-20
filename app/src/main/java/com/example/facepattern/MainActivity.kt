@@ -92,6 +92,14 @@ private data class BrowPlan(
     val segmentationSnapshot: BrowSegmentationResult? = null
 )
 
+private data class NativeBrowContour(
+    val regionIndex: Int,
+    val xStart: Int,
+    val top: FloatArray,
+    val bottom: FloatArray,
+    val regionBounds: IntArray
+)
+
 class MainActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
     private lateinit var browView: BrowDesignView
@@ -1276,6 +1284,35 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun toggleNativeShapeDesign(forceOff: Boolean = false) {
+        if (forceOff) {
+            useNativeShape = false
+            browView.setNativeShapeMode(false)
+            status.text = "已切换到参数化眉形底稿"
+            return
+        }
+        val result = segmentationResult
+        if (result == null) {
+            Toast.makeText(this, "请先识别原生眉区，并检查/修正识别结果", Toast.LENGTH_LONG).show()
+            toggleNativeSegmentation()
+            return
+        }
+        if (!browView.hasUsableNativeContour()) {
+            segmentationLabel.text = "当前掩膜没有提取出连续眉形轮廓，请调整灵敏度或手工补画"
+            Toast.makeText(this, "没有可靠的眉形轮廓，请先修正绿色识别层", Toast.LENGTH_LONG).show()
+            showNativeSegmentation = true
+            browView.setSegmentationResult(result, true)
+            return
+        }
+        useNativeShape = true
+        showNativeSegmentation = false
+        browView.setSegmentationEditMode(false)
+        browView.setSegmentationResult(result, false)
+        browView.setNativeShapeMode(true)
+        segmentationLabel.text = "正在使用原生眉区轮廓生成底稿。请调整后人工确认边界。"
+        status.text = "已切换到原生眉形轮廓底稿，可微调粗细、长度和弧度"
+    }
+
     private fun runSegmentation() {
         val photo = capturedPhoto ?: return
         val points = browView.facePoints()
@@ -1307,6 +1344,7 @@ class MainActivity : AppCompatActivity() {
                     showNativeSegmentation = false
                 } else {
                     browView.setSegmentationResult(result, showNativeSegmentation)
+                    browView.setNativeShapeMode(useNativeShape)
                     segmentationLabel.text = "识别方式：${result.method} · 参考置信度 ${(result.confidence * 100).toInt()}% · 识别像素 ${result.selectedPixelCount} · 请人工检查边界"
                 }
             }
