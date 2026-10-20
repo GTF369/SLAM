@@ -226,7 +226,24 @@ class MainActivity : AppCompatActivity() {
         designControls.addView(segmentationRow)
         addButtonRow(designControls, listOf(
             "识别原生眉区" to { toggleNativeSegmentation() },
-            "隐藏识别层" to { showNativeSegmentation = false; browView.setSegmentationResult(segmentationResult, false) }
+            "隐藏识别层" to {
+                showNativeSegmentation = false
+                browView.setSegmentationEditMode(false)
+                browView.setSegmentationResult(segmentationResult, false)
+            }
+        ))
+        addButtonRow(designControls, listOf(
+            "画入缺失眉区" to {
+                showNativeSegmentation = true
+                browView.setSegmentationEditMode(true, includePixels = true)
+                toggleNativeSegmentation()
+            },
+            "擦除误识别" to {
+                showNativeSegmentation = true
+                browView.setSegmentationEditMode(true, includePixels = false)
+                toggleNativeSegmentation()
+            },
+            "完成修正" to { browView.setSegmentationEditMode(false) }
         ))
         thicknessSeek = addSlider(designControls, "粗细", 100, 50) { p ->
             params = params.copy(thickness = 0.55f + p / 100f * 0.90f)
@@ -1782,11 +1799,56 @@ private class BrowDesignView(context: Context) : View(context) {
 
     private var segmentationResult: BrowSegmentationResult? = null
     private var showSegmentation: Boolean = false
+    private var editSegmentationMask: Boolean = false
+    private var includeEditedPixels: Boolean = true
 
     fun setSegmentationResult(result: BrowSegmentationResult?, visible: Boolean) {
         segmentationResult = result
         showSegmentation = visible
+        if (!visible) editSegmentationMask = false
         invalidate()
+    }
+
+    fun setSegmentationEditMode(enabled: Boolean, includePixels: Boolean = true) {
+        editSegmentationMask = enabled
+        includeEditedPixels = includePixels
+        invalidate()
+    }
+
+    override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
+        if (!editSegmentationMask || !showSegmentation || event.action !in listOf(
+                android.view.MotionEvent.ACTION_DOWN,
+                android.view.MotionEvent.ACTION_MOVE,
+                android.view.MotionEvent.ACTION_UP
+            )) return super.onTouchEvent(event)
+        val image = photo ?: return false
+        val result = segmentationResult ?: return false
+        if (image.isRecycled || result.overlay.isRecycled) return false
+        val scale = max(width.toFloat() / image.width.coerceAtLeast(1), height.toFloat() / image.height.coerceAtLeast(1))
+        val imageLeft = (width - image.width * scale) / 2f
+        val imageTop = (height - image.height * scale) / 2f
+        val imageX = (event.x - imageLeft) / scale
+        val imageY = (event.y - imageTop) / scale
+        val maskX = imageX - result.offsetX
+        val maskY = imageY - result.offsetY
+        if (maskX !in 0f until result.overlay.width.toFloat() || maskY !in 0f until result.overlay.height.toFloat()) {
+            return true
+        }
+        val brushRadius = max(4f, (8f * resources.displayMetrics.density) / scale)
+        val maskCanvas = Canvas(result.overlay)
+        val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            if (includeEditedPixels) {
+                color = Color.argb(172, 71, 190, 157)
+                xfermode = null
+            } else {
+                color = Color.TRANSPARENT
+                xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.CLEAR)
+            }
+        }
+        maskCanvas.drawCircle(maskX, maskY, brushRadius, maskPaint)
+        invalidate()
+        return true
     }
 
     fun setParams(newParams: BrowParams) {
