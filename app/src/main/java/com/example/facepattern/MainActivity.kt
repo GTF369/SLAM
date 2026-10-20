@@ -871,7 +871,11 @@ class MainActivity : AppCompatActivity() {
         landmarker = null
         cameraExecutor?.shutdown()
         cameraExecutor = null
-        status.text = "高分辨率照片已分析，可调整眉形并保存多个方案"
+        status.text = "高分辨率照片已分析，正在自动识别原生眉区并生成初稿。请核查识别轮廓后再用于打印。"
+        // Start the brow-region parser automatically so the first draft can follow
+        // the customer's natural brow contour without requiring an extra setup tap.
+        // The asynchronous result remains editable and is not treated as a final stencil.
+        runSegmentation()
     }
 
     private fun retakePhoto() {
@@ -1429,8 +1433,18 @@ class MainActivity : AppCompatActivity() {
                     showNativeSegmentation = false
                 } else {
                     browView.setSegmentationResult(result, showNativeSegmentation)
+                    val contourUsable = browView.hasUsableNativeContour()
+                    // Use the native contour as the first draft only when contour
+                    // extraction succeeds and the density-based heuristic is not at
+                    // its lowest tier. The artist must still review/edit the mask.
+                    useNativeShape = contourUsable && result.maskQualityScore >= 0.58f
                     browView.setNativeShapeMode(useNativeShape)
                     segmentationLabel.text = "识别方式：${result.method} · 掩膜质量提示 ${(result.maskQualityScore * 100).toInt()}%（按像素占比估算，非模型置信概率）· 识别像素 ${result.selectedPixelCount} · 请人工检查边界"
+                    status.text = if (useNativeShape) {
+                        "已自动按原生眉区生成初稿。请检查绿色识别层并修正边界，再确认或保存方案。"
+                    } else {
+                        "眉区轮廓不够可靠，当前使用参数化初稿。可调整灵敏度、手工补画/擦除后再切换原生眉形。"
+                    }
                 }
             }
         }
