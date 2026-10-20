@@ -18,7 +18,8 @@ internal data class BrowSegmentationResult(
     val offsetY: Int,
     val method: String,
     val confidence: Float,
-    val selectedPixelCount: Int
+    val selectedPixelCount: Int,
+    val regions: List<IntArray>
 )
 
 /**
@@ -131,7 +132,8 @@ internal object BrowSegmentationEngine {
             offsetY = top,
             method = if (usedModel) "本地眉毛分割模型" else "自适应对比度预分割",
             confidence = if (processedRegions == 0) 0f else confidenceSum / processedRegions,
-            selectedPixelCount = totalSelected
+            selectedPixelCount = totalSelected,
+            regions = regions.map { it.copyOf() }
         )
     }
 
