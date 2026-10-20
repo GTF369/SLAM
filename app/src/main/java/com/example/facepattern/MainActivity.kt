@@ -202,7 +202,8 @@ class MainActivity : AppCompatActivity() {
         ))
         addButtonRow(designControls, listOf(
             "顾客偏好" to { recordPreference() },
-            "导出偏好数据" to { exportPreferenceCsv() }
+            "导出偏好数据" to { exportPreferenceCsv() },
+            "清除本机记录" to { clearLocalRecords() }
         ))
         addButtonRow(designControls, listOf(
             "曲率标定" to { showCurvatureCalibration() },
@@ -403,6 +404,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun captureForDesign() {
+        if (captureInProgress) return
+        AlertDialog.Builder(this)
+            .setTitle("顾客拍摄与数据使用确认")
+            .setMessage("请先向顾客说明并取得同意。照片会在本机内存中用于眉形设计，当前原型不会上传照片。点击“保存效果图”会将包含面部的设计图写入手机相册。曲率和偏好记录不包含姓名等身份字段。")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("同意并拍照") { _, _ -> captureHighResolutionPhoto() }
+            .show()
+    }
+
+    private fun captureHighResolutionPhoto() {
         if (captureInProgress) return
         val livePoints = browView.facePoints()
         if (livePoints.size < 400) {
@@ -1090,6 +1101,21 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun clearLocalRecords() {
+        AlertDialog.Builder(this)
+            .setTitle("清除应用内记录")
+            .setMessage("将删除本机保存的匿名偏好反馈与曲率测量记录。已导出的 CSV 文件和已保存到相册的设计图不会自动删除，需要到下载目录或相册中单独清除。此操作无法撤销。")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("清除") { _, _ ->
+                getSharedPreferences("brow_preference_feedback", Context.MODE_PRIVATE).edit().clear().apply()
+                getSharedPreferences("brow_curvature_samples", Context.MODE_PRIVATE).edit().clear().apply()
+                savedPlans.clear()
+                refreshPlanButtons()
+                Toast.makeText(this, "应用内匿名记录已清除", Toast.LENGTH_LONG).show()
+            }
+            .show()
+    }
+
     private fun askPrintCalibration() {
         val points = browView.facePoints()
         if (points.size < 470 || capturedPhoto == null) {
@@ -1098,8 +1124,8 @@ class MainActivity : AppCompatActivity() {
         }
         val input = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            hint = "实际瞳距（毫米）"
-            setText("63")
+            hint = "请输入实测瞳距（毫米）"
+            setText("")
         }
         AlertDialog.Builder(this)
             .setTitle("1:1 打印校准")
