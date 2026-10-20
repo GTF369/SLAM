@@ -44,7 +44,9 @@ private data class FaceParsingMap(
 internal object BrowSegmentationEngine {
     private const val PARSING_MODEL_SIZE = 384
     private const val CUSTOM_MODEL_SIZE = 256
-    private const val PARSING_CLASSES = 8
+    // The actual downloaded ONNX tensor has 19 channels, despite the model card's
+    // 8-class summary. This is the common CelebAMask-HQ face-parsing label order.
+    private const val PARSING_CLASSES = 19
     // EasyPortrait face-parsing BGR input statistics, applied to pixel values in [0,255].
     private val meanBgr = floatArrayOf(143.55267f, 132.96706f, 126.94924f)
     private val stdBgr = floatArrayOf(60.26253f, 60.32740f, 59.30989f)
@@ -341,7 +343,7 @@ internal object BrowSegmentationEngine {
             try {
                 val outputs = session.run(mapOf(onnxInputName to inputTensor))
                 try {
-                    val outputTensor = outputs.get(onnxOutputName) as? OnnxTensor ?: return null
+                    val outputTensor = outputs.get(onnxOutputName).orElse(null) as? OnnxTensor ?: return null
                     val logits = outputTensor.floatBuffer
                     val planeSize = PARSING_MODEL_SIZE * PARSING_MODEL_SIZE
                     val labels = ByteArray(planeSize)
@@ -393,8 +395,8 @@ internal object BrowSegmentationEngine {
                     .toInt()
                 if (modelX in 0 until PARSING_MODEL_SIZE) {
                     val label = parsed.labels[modelY * PARSING_MODEL_SIZE + modelX].toInt() and 0xFF
-                    // EasyPortrait classes: 2 = left brow, 3 = right brow.
-                    result[index] = label == 2 || label == 3
+                    // Common 19-class face parsing order: 6 = left brow, 7 = right brow.
+                    result[index] = label == 6 || label == 7
                 }
                 index++
             }
