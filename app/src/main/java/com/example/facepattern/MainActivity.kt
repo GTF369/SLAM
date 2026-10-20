@@ -1877,7 +1877,8 @@ private class BrowDesignView(context: Context) : View(context) {
         val imageY = (event.y - imageTop) / scale
         val maskX = imageX - result.offsetX
         val maskY = imageY - result.offsetY
-        if (maskX !in 0f until result.overlay.width.toFloat() || maskY !in 0f until result.overlay.height.toFloat()) {
+        if (maskX < 0f || maskX >= result.overlay.width.toFloat() ||
+            maskY < 0f || maskY >= result.overlay.height.toFloat()) {
             return true
         }
         val brushRadius = max(4f, (8f * resources.displayMetrics.density) / scale)
@@ -1953,7 +1954,7 @@ private object BrowRenderer {
         if (points.size < 455) return
         val noseX = points.getOrNull(1)?.x ?: points.map { it.x }.average().toFloat()
         browSets.forEach { ids ->
-            val sideCenter = ids.mapNotNull { index -> points.getOrNull(index) }.map { it.x }.average().toFloat()
+            val sideCenter = ids.map { index -> points.getOrNull(index) }.filterNotNull().map { it.x }.average().toFloat()
             // The displayed selfie image is mirrored. Convert its screen side to anatomical side.
             val anatomicalRight = sideCenter < noseX
             drawOne(canvas, points, ids, params, outlineOnly, curvatureFactors, anatomicalRight)
