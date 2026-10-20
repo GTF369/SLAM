@@ -255,11 +255,18 @@ class MainActivity : AppCompatActivity() {
         ))
         addButtonRow(designControls, listOf(
             "画入缺失眉区" to {
+                // Editing invalidates the previous review until the artist confirms again.
+                segmentationReviewed = false
+                useNativeShape = false
+                browView.setNativeShapeMode(false)
                 showNativeSegmentation = true
                 browView.setSegmentationEditMode(true, includePixels = true)
                 toggleNativeSegmentation()
             },
             "擦除误识别" to {
+                segmentationReviewed = false
+                useNativeShape = false
+                browView.setNativeShapeMode(false)
                 showNativeSegmentation = true
                 browView.setSegmentationEditMode(true, includePixels = false)
                 toggleNativeSegmentation()
