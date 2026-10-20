@@ -1511,38 +1511,48 @@ private object BrowRenderer {
     }
 
     private fun drawOne(canvas: Canvas, points: List<PointF>, ids: IntArray, params: BrowParams, outlineOnly: Boolean) {
-        val valid = ids.map { index -> points.getOrNull(index) }.filterNotNull().filter { it.x.isFinite() && it.y.isFinite() }
-        if (valid.size < 4) return
-        val nose = points.getOrNull(1) ?: return
-        val inner = valid.minByOrNull { abs(it.x - nose.x) } ?: return
-        val outer = valid.maxByOrNull { abs(it.x - inner.x) } ?: return
-        val span = hypot((outer.x - inner.x).toDouble(), (outer.y - inner.y).toDouble()).toFloat() * params.length
-        if (span < 8f) return
-        val dx = outer.x - inner.x
-        val dy = outer.y - inner.y
-        val baseStart = PointF(inner.x + dx * (1f - params.length) * 0.5f, inner.y + dy * (1f - params.length) * 0.5f)
-        val baseEnd = PointF(outer.x - dx * (1f - params.length) * 0.5f, outer.y - dy * (1f - params.length) * 0.5f)
-        val peakY = min(baseStart.y, baseEnd.y) - span * 0.08f * params.arch
-        val control = PointF((baseStart.x + baseEnd.x) / 2f, 2f * peakY - (baseStart.y + baseEnd.y) / 2f)
+        // Use all detected brow-region landmarks instead of forcing a generic arch between two endpoints.
+        val ordered = ids.map { index -> points.getOrNull(index) }
+            .filterNotNull()
+            .filter { it.x.isFinite() && it.y.isFinite() }
+            .sortedBy { it.x }
+        if (ordered.size < 4) return
+        val anchorStart = ordered.first()
+        val anchorEnd = ordered.last()
+        val naturalSpan = hypot(
+            (anchorEnd.x - anchorStart.x).toDouble(),
+            (anchorEnd.y - anchorStart.y).toDouble()
+        ).toFloat()
+        if (naturalSpan < 8f) return
+
+        val centerX = (anchorStart.x + anchorEnd.x) / 2f
+        val displaySpan = naturalSpan * params.length
+        val centerline = (0..48).map { index ->
+            val t = index / 48f
+            val base = sampleCatmullRom(ordered, t)
+            val archDelta = naturalSpan * 0.075f * (params.arch - 1f) * 4f * t * (1f - t)
+            PointF(centerX + (base.x - centerX) * params.length, base.y - archDelta)
+        }
+        val halfThickness = displaySpan * 0.055f * params.thickness
         val top = mutableListOf<PointF>()
         val bottom = mutableListOf<PointF>()
-        val halfThickness = span * 0.055f * params.thickness
-        for (i in 0..32) {
-            val t = i / 32f
-            val oneMinus = 1f - t
-            val x = oneMinus * oneMinus * baseStart.x + 2f * oneMinus * t * control.x + t * t * baseEnd.x
-            val y = oneMinus * oneMinus * baseStart.y + 2f * oneMinus * t * control.y + t * t * baseEnd.y
-            val tx = 2f * oneMinus * (control.x - baseStart.x) + 2f * t * (baseEnd.x - control.x)
-            val ty = 2f * oneMinus * (control.y - baseStart.y) + 2f * t * (baseEnd.y - control.y)
-            val length = max(0.001f, hypot(tx.toDouble(), ty.toDouble()).toFloat())
-            var nx = -ty / length
-            var ny = tx / length
+        for (i in centerline.indices) {
+            val current = centerline[i]
+            val before = centerline[(i - 1).coerceAtLeast(0)]
+            val after = centerline[(i + 1).coerceAtMost(centerline.lastIndex)]
+            val tx = after.x - before.x
+            val ty = after.y - before.y
+            val tangentLength = max(0.001f, hypot(tx.toDouble(), ty.toDouble()).toFloat())
+            var nx = -ty / tangentLength
+            var ny = tx / tangentLength
             if (ny > 0f) { nx = -nx; ny = -ny }
+            val t = i.toFloat() / centerline.lastIndex
             val taper = 0.12f + 0.88f * sin(Math.PI * t).toFloat().coerceAtLeast(0f)
-            val thick = halfThickness * taper
-            top.add(PointF(x + nx * thick, y + ny * thick))
-            bottom.add(PointF(x - nx * thick, y - ny * thick))
+            val thickness = halfThickness * taper
+            top.add(PointF(current.x + nx * thickness, current.y + ny * thickness))
+            bottom.add(PointF(current.x - nx * thickness, current.y - ny * thickness))
         }
+
         val path = Path()
         path.moveTo(top.first().x, top.first().y)
         top.drop(1).forEach { path.lineTo(it.x, it.y) }
@@ -1551,7 +1561,7 @@ private object BrowRenderer {
         if (outlineOnly) {
             paint.shader = null
             paint.style = Paint.Style.STROKE
-            paint.strokeWidth = max(1.0f, span * 0.003f)
+            paint.strokeWidth = max(1.0f, displaySpan * 0.003f)
             paint.strokeJoin = Paint.Join.ROUND
             paint.strokeCap = Paint.Cap.ROUND
             paint.color = Color.BLACK
@@ -1566,9 +1576,41 @@ private object BrowRenderer {
             else -> intArrayOf(Color.argb(150, 76, 48, 34), Color.argb(185, 92, 58, 40))
         }
         paint.style = Paint.Style.FILL
-        paint.shader = LinearGradient(baseStart.x, peakY, baseEnd.x, max(baseStart.y, baseEnd.y), colors[0], colors[1], Shader.TileMode.CLAMP)
+        paint.shader = LinearGradient(
+            anchorStart.x,
+            centerline.minOf { it.y },
+            anchorEnd.x,
+            max(anchorStart.y, anchorEnd.y),
+            colors[0],
+            colors[1],
+            Shader.TileMode.CLAMP
+        )
         canvas.drawPath(path, paint)
         paint.shader = null
+    }
+
+    private fun sampleCatmullRom(points: List<PointF>, t: Float): PointF {
+        if (points.size < 2) return points.firstOrNull() ?: PointF(0f, 0f)
+        val position = t.coerceIn(0f, 1f) * (points.size - 1)
+        val segment = position.toInt().coerceIn(0, points.size - 2)
+        val u = position - segment
+        val p0 = points[(segment - 1).coerceAtLeast(0)]
+        val p1 = points[segment]
+        val p2 = points[segment + 1]
+        val p3 = points[(segment + 2).coerceAtMost(points.lastIndex)]
+        val u2 = u * u
+        val u3 = u2 * u
+        fun interpolate(a: Float, b: Float, c: Float, d: Float): Float =
+            0.5f * (
+                2f * b +
+                (-a + c) * u +
+                (2f * a - 5f * b + 4f * c - d) * u2 +
+                (-a + 3f * b - 3f * c + d) * u3
+            )
+        return PointF(
+            interpolate(p0.x, p1.x, p2.x, p3.x),
+            interpolate(p0.y, p1.y, p2.y, p3.y)
+        )
     }
 
     fun pupilDistance(points: List<PointF>): Float {
