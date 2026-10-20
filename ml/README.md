@@ -61,6 +61,41 @@ For an ideal circular arc, if the chord (c) and radius (R) are known, then:
 
 and `k = s / c`. Real brow ridges are not perfect circular arcs, and a single frontal photograph does not identify the depth or curvature. Do not infer a universal (R) or universal correction interval from the photo alone.
 
-## 4. Limitations
 
-The app currently generates the brow outline from a small set of facial landmarks and adjustable parameters. It does not yet segment the client's original eyebrow hairs, does not reconstruct a measured 3D brow surface, and does not automatically warp the print template to a per-client 3D surface. The preference model is only activated after real data are collected and a validated JSON model is added. No synthetic model is included in this repository.
+## 4. Brow-region segmentation
+
+The Android app has two modes:
+
+- **Adaptive contrast pre-segmentation** is available immediately, without a trained model. It estimates dark eyebrow pixels from local luminance around the face-landmark brow ROI and provides a sensitivity slider, an overlay, and touch brushes to add/remove pixels. It is a convenient starting mask, not a validated precise segmenter.
+- **Optional learned segmentation** is activated when `app/src/main/assets/brow_segmentation.tflite` is present and the model has the expected float32 input `[1,256,256,3]` (RGB normalized to 0–1) and output `[1,256,256,1]` (sigmoid probabilities). The app falls back safely if this model is absent or incompatible.
+
+### Collect and annotate data
+
+1. Obtain specific consent to export and annotate facial photos. In the app, use **导出原始标注照片** only when the customer has agreed to this separate training use.
+2. Name source images by anonymous case, for example `CASE001_left.jpg` and `CASE001_right.jpg`. Do not use names, appointment numbers or phone numbers.
+3. Install optional tools with `python -m pip install -r ml/requirements-segmentation.txt`.
+4. Run `python ml/annotate_brow_masks.py --images /local/consented/photos --output /local/brow_dataset`. Select each brow ROI with margins similar to the app's landmark ROI, then outline visible eyebrow hair/body with the polygon editor. Review masks manually.
+5. The tool generates `images/`, `masks/` and `manifest.csv`. The manifest has `image,mask,case_id`. Same-client images must share one case ID to prevent data leakage between training and validation.
+
+### Train and export
+
+```bash
+python ml/train_brow_segmentation.py --dataset /local/brow_dataset --output app/src/main/assets/brow_segmentation.tflite --metrics ml/brow_segmentation_metrics.json
+```
+
+The training script uses a compact U-Net, binary-cross-entropy plus Dice loss, aligned paired augmentations, and a case-grouped holdout. It refuses to train fewer than 50 distinct cases by default. This is only an initial exploratory floor, not a sufficient commercial sample-size claim. Review the mask quality, Dice/IoU, failure cases and group-level results before committing a model. Validate on independent clients, skin tones, makeup, lighting and camera conditions and then on the target Android device.
+
+No trained brow-segmentation model is shipped in this repository because no authorized, professionally annotated dataset was supplied. The application therefore uses the adaptive pre-segmentation fallback until a compatible trained model is added.
+
+## 5. Regional curvature correction in printing
+
+The print dialog can apply experimental regional length factors only when all eight regions for the current anonymous case have been measured. The factors are per-region medians of `arc_mm / chord_mm` and are capped at 1.4 when applied to adjacent landmark segments. The print page marks the correction as experimental.
+
+This correction is a regional length adjustment. It is not full 3D reconstruction or a validated physical unwrapping of an individual's brow ridge. The measurement protocol and independent validation requirements are in [CURVATURE_PROTOCOL.md](CURVATURE_PROTOCOL.md).
+
+## 6. Remaining production gates
+
+- No trained ranking model is present until real feedback data is collected and a model JSON is generated.
+- No trained segmentation model is present until authorized images and professionally reviewed masks are collected.
+- The experimental regional correction must be evaluated against a measured surface model and physical stencil transfer, with print-scale checks on each printer model.
+- The Android app must complete OPPO Find X7 and target-printer field tests, crash/memory checks, and a signed release build.
