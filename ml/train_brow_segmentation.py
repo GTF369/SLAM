@@ -150,17 +150,19 @@ def main() -> None:
     x_train, y_train = x[train_idx], y[train_idx]
     x_test, y_test = x[test_idx], y[test_idx]
 
-    # Augmentation is applied only to the training split. Horizontally mirrored
-    # examples preserve a valid mask and improve robustness across selfie sides.
-    augmenter = tf.keras.Sequential([
-        tf.keras.layers.RandomFlip("horizontal"),
-        tf.keras.layers.RandomBrightness(0.10, value_range=(0.0, 1.0)),
-        tf.keras.layers.RandomContrast(0.15),
-    ], name="train_augmentation")
+    # Apply geometric augmentation to both image and mask so supervision remains aligned.
+    def augment_pair(image, mask):
+        flip = tf.random.uniform(()) > 0.5
+        image = tf.cond(flip, lambda: tf.image.flip_left_right(image), lambda: image)
+        mask = tf.cond(flip, lambda: tf.image.flip_left_right(mask), lambda: mask)
+        image = tf.image.random_brightness(image, max_delta=0.08)
+        image = tf.image.random_contrast(image, lower=0.85, upper=1.15)
+        return tf.clip_by_value(image, 0.0, 1.0), mask
+
     train_ds = tf.data.Dataset.from_tensor_slices((x_train, y_train))
     train_ds = train_ds.shuffle(len(x_train), seed=args.seed, reshuffle_each_iteration=True)
     train_ds = train_ds.batch(args.batch_size).map(
-        lambda a, b: (augmenter(a, training=True), b),
+        augment_pair,
         num_parallel_calls=tf.data.AUTOTUNE,
     ).prefetch(tf.data.AUTOTUNE)
 
