@@ -138,6 +138,9 @@ class MainActivity : AppCompatActivity() {
     private var useNativeShape = false
     private var segmentationResult: BrowSegmentationResult? = null
     private var showNativeSegmentation = false
+    // Only reviewed/confirmed segmentation masks may contribute brow-shape features
+    // to preference collection and any future trained model.
+    private var segmentationReviewed = false
     private var segmentationSensitivity = 0.72f
     private var segmentationGeneration = 0
 
@@ -2081,7 +2084,11 @@ private data class BrowFaceMeasurements(
     val jawFaceWidthRatio: Float,
     val browEyeDistanceRatio: Float,
     val browAsymmetryRatio: Float,
-    val eyeLineTilt: Float
+    val eyeLineTilt: Float,
+    val nativeBrowAreaFraction: Float = 0f,
+    val nativeBrowSideImbalance: Float = 0f,
+    val nativeBrowMaskAvailable: Float = 0f,
+    val nativeShapeMode: Float = 0f
 )
 
 /**
@@ -2100,8 +2107,17 @@ private object BrowRecommendationEngine {
     private var loadAttempted = false
     private var trainedModel: TrainedModel? = null
 
-    fun measurements(points: List<PointF>): BrowFaceMeasurements {
-        if (points.size <= 454) return BrowFaceMeasurements(0f, 0f, 0f, 0f, 0f, 0f)
+    fun measurements(
+        points: List<PointF>,
+        segmentation: BrowSegmentationResult? = null,
+        maskReviewed: Boolean = false,
+        nativeShapeMode: Boolean = false
+    ): BrowFaceMeasurements {
+        val maskFeatures = nativeBrowMaskFeatures(segmentation, maskReviewed)
+        if (points.size <= 454) {
+            return BrowFaceMeasurements(0f, 0f, 0f, 0f, 0f, 0f,
+                maskFeatures[0], maskFeatures[1], maskFeatures[2], if (nativeShapeMode) 1f else 0f)
+        }
         val faceWidth = distance(points[234], points[454]).coerceAtLeast(1f)
         val faceHeight = distance(
             points.getOrNull(10) ?: points[234],
@@ -2125,8 +2141,55 @@ private object BrowRecommendationEngine {
             jawWidth / faceWidth,
             browEyeDistance,
             asymmetry,
-            eyeTilt
+            eyeTilt,
+            maskFeatures[0],
+            maskFeatures[1],
+            maskFeatures[2],
+            if (nativeShapeMode) 1f else 0f
         )
+    }
+
+    /**
+     * Mask area fractions describe the reviewed pixels relative to each model ROI.
+     * They are engineering features, not measurements of real hair thickness or
+     * proof that the parser mask is anatomically correct.
+     */
+    private fun nativeBrowMaskFeatures(
+        segmentation: BrowSegmentationResult?,
+        reviewed: Boolean
+    ): FloatArray {
+        if (!reviewed || segmentation == null || segmentation.overlay.isRecycled ||
+            segmentation.regions.size < 2) return floatArrayOf(0f, 0f, 0f)
+        return try {
+            val mask = segmentation.overlay
+            val pixels = IntArray(mask.width * mask.height)
+            mask.getPixels(pixels, 0, mask.width, 0, 0, mask.width, mask.height)
+            val fractions = segmentation.regions.take(2).mapNotNull { bounds ->
+                if (bounds.size < 4) return@mapNotNull null
+                val x0 = (bounds[0] - segmentation.offsetX).coerceIn(0, mask.width)
+                val y0 = (bounds[1] - segmentation.offsetY).coerceIn(0, mask.height)
+                val x1 = (bounds[2] - segmentation.offsetX).coerceIn(x0, mask.width)
+                val y1 = (bounds[3] - segmentation.offsetY).coerceIn(y0, mask.height)
+                val area = (x1 - x0) * (y1 - y0)
+                if (area <= 0) return@mapNotNull null
+                var selected = 0
+                for (y in y0 until y1) {
+                    val row = y * mask.width
+                    for (x in x0 until x1) {
+                        if (Color.alpha(pixels[row + x]) > 0) selected++
+                    }
+                }
+                selected.toFloat() / area.toFloat()
+            }
+            if (fractions.size != 2) floatArrayOf(0f, 0f, 0f)
+            else floatArrayOf(
+                ((fractions[0] + fractions[1]) / 2f).coerceIn(0f, 1f),
+                abs(fractions[0] - fractions[1]).coerceIn(0f, 1f),
+                1f
+            )
+        } catch (_: Exception) {
+            floatArrayOf(0f, 0f, 0f)
+        }
     }
 
     fun hasApprovedModel(context: Context): Boolean = loadModel(context) != null
