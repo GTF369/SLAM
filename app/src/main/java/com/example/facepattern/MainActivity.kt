@@ -604,6 +604,57 @@ class MainActivity : AppCompatActivity() {
             )).toFloat()
             if (abs(rollDegrees) > 12f) warnings.add("头部有明显倾斜，请尽量让双眼连线接近水平")
         }
+        // Sample the face region sparsely so exposure/contrast checks remain inexpensive
+        // even on high-resolution photos.
+        val faceLeft = min(leftCheek.x, rightCheek.x).toInt().coerceIn(0, photo.width - 1)
+        val faceRight = max(leftCheek.x, rightCheek.x).toInt().coerceIn(faceLeft + 1, photo.width)
+        val foreheadY = points.getOrNull(10)?.y ?: 0f
+        val chinY = points.getOrNull(152)?.y ?: photo.height.toFloat()
+        val faceTop = min(foreheadY, chinY).toInt().coerceIn(0, photo.height - 1)
+        val faceBottom = max(foreheadY, chinY).toInt().coerceIn(faceTop + 1, photo.height)
+        val stepX = max(4, (faceRight - faceLeft) / 36)
+        val stepY = max(4, (faceBottom - faceTop) / 36)
+        var lumaSum = 0.0
+        var lumaSquareSum = 0.0
+        var sampleCount = 0
+        var gradientSum = 0.0
+        var gradientCount = 0
+        fun lumaAt(x: Int, y: Int): Double {
+            val pixel = photo.getPixel(x.coerceIn(0, photo.width - 1), y.coerceIn(0, photo.height - 1))
+            val red = Color.red(pixel)
+            val green = Color.green(pixel)
+            val blue = Color.blue(pixel)
+            return 0.299 * red + 0.587 * green + 0.114 * blue
+        }
+        var y = faceTop
+        while (y < faceBottom) {
+            var x = faceLeft
+            while (x < faceRight) {
+                val luma = lumaAt(x, y)
+                lumaSum += luma
+                lumaSquareSum += luma * luma
+                sampleCount++
+                if (x + stepX < faceRight) {
+                    gradientSum += abs(luma - lumaAt(x + stepX, y))
+                    gradientCount++
+                }
+                if (y + stepY < faceBottom) {
+                    gradientSum += abs(luma - lumaAt(x, y + stepY))
+                    gradientCount++
+                }
+                x += stepX
+            }
+            y += stepY
+        }
+        if (sampleCount > 0) {
+            val meanLuma = lumaSum / sampleCount
+            val variance = max(0.0, lumaSquareSum / sampleCount - meanLuma * meanLuma)
+            val contrast = kotlin.math.sqrt(variance)
+            val meanGradient = if (gradientCount > 0) gradientSum / gradientCount else 0.0
+            if (meanLuma < 58.0) warnings.add("面部整体偏暗，建议使用正面柔和补光后重拍")
+            if (meanLuma > 218.0) warnings.add("面部可能过曝，请降低强光或调整曝光")
+            if (contrast < 15.0 && meanGradient < 4.0) warnings.add("面部细节或对比度不足，请检查对焦与光线")
+        }
         return warnings.takeIf { it.isNotEmpty() }?.joinToString("\n")
     }
 
