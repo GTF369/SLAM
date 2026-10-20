@@ -1637,7 +1637,12 @@ private object BrowRenderer {
         val scale = min(1f, maxWidth.toFloat() / source.width.coerceAtLeast(1))
         val width = max(1, (source.width * scale).toInt())
         val height = max(1, (source.height * scale).toInt())
-        val output = Bitmap.createScaledBitmap(source, width, height, true).copy(Bitmap.Config.ARGB_8888, true)
+        val scaled = Bitmap.createScaledBitmap(source, width, height, true)
+        val output = try {
+            scaled.copy(Bitmap.Config.ARGB_8888, true) ?: throw IllegalStateException("无法创建方案预览")
+        } finally {
+            if (scaled !== source && !scaled.isRecycled) scaled.recycle()
+        }
         val scaledPoints = points.map { PointF(it.x * width / source.width, it.y * height / source.height) }
         drawBrows(Canvas(output), scaledPoints, params)
         return output
