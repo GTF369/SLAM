@@ -263,26 +263,9 @@ class MainActivity : AppCompatActivity() {
                 this,
                 FaceLandmarker.FaceLandmarkerOptions.builder()
                     .setBaseOptions(BaseOptions.builder().setModelAssetPath("face_landmarker.task").build())
-                    .setRunningMode(RunningMode.LIVE_STREAM)
+                    .setRunningMode(RunningMode.VIDEO)
                     .setNumFaces(1)
                     .setOutputFacialTransformationMatrixes(true)
-                    .setResultListener { result, _ ->
-                        val normalized = result.faceLandmarks().firstOrNull()?.map { PointF(it.x(), it.y()) } ?: emptyList()
-                        runOnUiThread {
-                            if (!designMode) {
-                                val mapped = normalized.map { mapToPreview(it) }
-                                browView.setFacePoints(mapped)
-                                if (mapped.size >= 400) {
-                                    status.text = "已识别面部关键点 · 请让顾客自然睁眼、正视镜头"
-                                } else {
-                                    status.text = "请正对前置摄像头，避免强逆光"
-                                }
-                            }
-                        }
-                    }
-                    .setErrorListener { error ->
-                        runOnUiThread { if (!designMode) status.text = "人脸识别错误：" + (error.message ?: "请重新尝试") }
-                    }
                     .build()
             )
             cameraExecutor?.shutdown()
@@ -306,13 +289,33 @@ class MainActivity : AppCompatActivity() {
                                     if (it !== bitmap) bitmap.recycle()
                                 }
                             } else bitmap
-                            frameWidth = rotated.width
-                            frameHeight = rotated.height
-                            val mpImage = BitmapImageBuilder(rotated).build()
-                            val now = System.nanoTime() / 1_000_000L
-                            val timestamp = lastTimestamp.updateAndGet { old -> maxOf(now, old + 1L) }
-                            landmarker?.detectAsync(mpImage, timestamp)
-                            if (rotated !== bitmap) rotated.recycle()
+                            try {
+                                frameWidth = rotated.width
+                                frameHeight = rotated.height
+                                val mpImage = BitmapImageBuilder(rotated).build()
+                                try {
+                                    val now = System.nanoTime() / 1_000_000L
+                                    val timestamp = lastTimestamp.updateAndGet { old -> maxOf(now, old + 1L) }
+                                    val result = landmarker?.detectForVideo(mpImage, timestamp)
+                                    val normalized = result?.faceLandmarks()?.firstOrNull()
+                                        ?.map { PointF(it.x(), it.y()) } ?: emptyList()
+                                    runOnUiThread {
+                                        if (!designMode) {
+                                            val mapped = normalized.map { mapToPreview(it) }
+                                            browView.setFacePoints(mapped)
+                                            status.text = if (mapped.size >= 400) {
+                                                "已识别面部关键点 · 请让顾客自然睁眼、正视镜头"
+                                            } else {
+                                                "请正对前置摄像头，避免强逆光"
+                                            }
+                                        }
+                                    }
+                                } finally {
+                                    mpImage.close()
+                                }
+                            } finally {
+                                if (!rotated.isRecycled) rotated.recycle()
+                            }
                         } catch (_: Exception) {
                             // Skip a broken camera frame. The next frame will be analyzed.
                         } finally {
