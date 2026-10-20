@@ -11,6 +11,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PointF
@@ -33,6 +34,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -41,6 +43,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -176,7 +179,7 @@ class MainActivity : AppCompatActivity() {
             "重新拍摄" to { retakePhoto() }
         ))
         val note = TextView(this).apply {
-            text = "打印前需实测瞳距并校准打印机。单张正面照不能可靠恢复眉弓三维曲率，本版不自动做三维曲面校正。"
+            text = "打印前需实测瞳距。打印页附 20 mm 校准框，打印后务必量取确认。单张正面照不能可靠恢复眉弓三维曲率，本版不自动做三维曲面校正。"
             textSize = 11f
             setTextColor(0xFFD5D7DC.toInt())
             setPadding(dp(2), dp(6), dp(2), 0)
@@ -593,7 +596,7 @@ class MainActivity : AppCompatActivity() {
         }
         AlertDialog.Builder(this)
             .setTitle("1:1 打印校准")
-            .setMessage("请先用尺测量顾客双眼瞳孔中心间的实际距离，并输入毫米数。默认值仅用于演示，不能代替实测。打印时选择 A4 与 100% / 实际尺寸。")
+            .setMessage("请先用尺测量顾客双眼瞳孔中心间的实际距离，并输入毫米数。默认值仅用于演示，不能代替实测。打印时选择 A4 与 100% / 实际尺寸，打印后量取页面中的 20 毫米方框，确认打印缩放无误。")
             .setView(input)
             .setNegativeButton("取消", null)
             .setPositiveButton("生成打印模板") { _, _ ->
@@ -667,15 +670,26 @@ class MainActivity : AppCompatActivity() {
                     val pointsPerPixel = 72f / (25.4f * pixelsPerMm)
                     val widthPts = template.width * pointsPerPixel
                     val heightPts = template.height * pointsPerPixel
-                    if (widthPts > content.width() || heightPts > content.height()) {
+                    val calibrationPts = 20f * 72f / 25.4f
+                    val gapPts = 12f
+                    val totalHeightPts = heightPts + gapPts + calibrationPts
+                    if (widthPts > content.width() || totalHeightPts > content.height()) {
                         document.finishPage(page)
-                        callback.onWriteFailed("模板超过 A4 纸张可打印范围，请检查瞳距和照片比例")
+                        callback.onWriteFailed("模板及 20 毫米校准框超过 A4 可打印范围，请检查瞳距和照片比例")
                         return
                     }
                     val left = content.left + (content.width() - widthPts) / 2f
-                    val top = content.top + (content.height() - heightPts) / 2f
-                    val dest = RectF(left, top, left + widthPts, top + heightPts)
+                    val groupTop = content.top + (content.height() - totalHeightPts) / 2f
+                    val dest = RectF(left, groupTop, left + widthPts, groupTop + heightPts)
                     canvas.drawBitmap(template, null, dest, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+                    val boxLeft = content.left + (content.width() - calibrationPts) / 2f
+                    val boxTop = groupTop + heightPts + gapPts
+                    val calibrationPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color = Color.BLACK
+                        style = Paint.Style.STROKE
+                        strokeWidth = 0.6f
+                    }
+                    canvas.drawRect(RectF(boxLeft, boxTop, boxLeft + calibrationPts, boxTop + calibrationPts), calibrationPaint)
                     document.finishPage(page)
                     FileOutputStream(destination.fileDescriptor).use { document.writeTo(it) }
                     callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
