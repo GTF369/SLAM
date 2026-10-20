@@ -1948,16 +1948,26 @@ private class BrowDesignView(context: Context) : View(context) {
     fun facePoints(): List<PointF> = points.map { PointF(it.x, it.y) }
 
     private var segmentationResult: BrowSegmentationResult? = null
+    private var nativeContours: List<NativeBrowContour> = emptyList()
     private var showSegmentation: Boolean = false
+    private var useNativeShape: Boolean = false
     private var editSegmentationMask: Boolean = false
     private var includeEditedPixels: Boolean = true
 
     fun setSegmentationResult(result: BrowSegmentationResult?, visible: Boolean) {
         segmentationResult = result
         showSegmentation = visible
+        nativeContours = result?.let { BrowRenderer.extractNativeContours(it) } ?: emptyList()
         if (!visible) editSegmentationMask = false
         invalidate()
     }
+
+    fun setNativeShapeMode(enabled: Boolean) {
+        useNativeShape = enabled && nativeContours.isNotEmpty()
+        invalidate()
+    }
+
+    fun hasUsableNativeContour(): Boolean = nativeContours.size >= 2
 
     fun setSegmentationEditMode(enabled: Boolean, includePixels: Boolean = true) {
         editSegmentationMask = enabled
@@ -1998,6 +2008,10 @@ private class BrowDesignView(context: Context) : View(context) {
             }
         }
         maskCanvas.drawCircle(maskX, maskY, brushRadius, maskPaint)
+        if (event.action == android.view.MotionEvent.ACTION_UP) {
+            nativeContours = BrowRenderer.extractNativeContours(result)
+            if (useNativeShape && nativeContours.isEmpty()) useNativeShape = false
+        }
         invalidate()
         return true
     }
@@ -2031,10 +2045,14 @@ private class BrowDesignView(context: Context) : View(context) {
                     Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
                 )
             }
-            val screenPoints = points.map { p ->
-                PointF(left + p.x * scale, top + p.y * scale)
+            if (useNativeShape && nativeContours.isNotEmpty()) {
+                BrowRenderer.drawNativeContours(canvas, nativeContours, points, params, scale, left, top)
+            } else {
+                val screenPoints = points.map { p ->
+                    PointF(left + p.x * scale, top + p.y * scale)
+                }
+                BrowRenderer.drawBrows(canvas, screenPoints, params)
             }
-            BrowRenderer.drawBrows(canvas, screenPoints, params)
         } else {
             BrowRenderer.drawBrows(canvas, points, params)
         }
