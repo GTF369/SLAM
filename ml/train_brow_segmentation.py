@@ -83,7 +83,7 @@ def iou_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 
 
 def dice_bce(y_true, y_pred):
-    bce = tf.keras.losses.binary_crossentropy(y_true, y_pred)
+    bce = tf.reduce_mean(tf.keras.losses.binary_crossentropy(y_true, y_pred))
     axes = [1, 2, 3]
     intersection = tf.reduce_sum(y_true * y_pred, axis=axes)
     denominator = tf.reduce_sum(y_true + y_pred, axis=axes)
