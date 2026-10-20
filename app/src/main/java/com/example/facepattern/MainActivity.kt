@@ -1597,11 +1597,21 @@ class MainActivity : AppCompatActivity() {
             textSize = 12f
             setPadding(dp(4), dp(6), dp(4), dp(6))
         }
+        val printScalePrefs = getSharedPreferences("brow_print_calibration", Context.MODE_PRIVATE)
+        val savedPrintScaleCorrection = printScalePrefs.getFloat("scale_correction", 1f)
         val printScaleInput = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            hint = "上次打印的校准框边长（mm），首次留空"
-            setText(getSharedPreferences("brow_print_calibration", Context.MODE_PRIVATE)
-                .getString("measured_square_mm", ""))
+            hint = "上一张打印稿中 20 mm 方框的实测边长，未测量留空"
+            setText("")
+        }
+        val printScaleState = TextView(this).apply {
+            text = "当前已保存打印比例修正系数：x${(savedPrintScaleCorrection * 1000f).roundToInt() / 1000f}。留空会继续使用该系数。"
+            textSize = 11f
+            setPadding(dp(4), dp(2), dp(4), dp(4))
+        }
+        val resetPrintScale = CheckBox(this).apply {
+            text = "更换打印机、纸张或打印设置后，重置修正系数"
+            isChecked = false
         }
         val applyCorrection = CheckBox(this).apply {
             text = "应用此顾客已实测的区域长度修正（实验性）"
@@ -1627,16 +1637,18 @@ class MainActivity : AppCompatActivity() {
             })
             addView(input)
             addView(TextView(this@MainActivity).apply {
-                text = "打印比例校准（可选）"
+                text = "打印比例校准（可选，当前已保存系数会持续生效）"
                 textSize = 12f
                 setPadding(dp(4), dp(4), dp(4), 0)
             })
             addView(printScaleInput)
             addView(TextView(this@MainActivity).apply {
-                text = "第一次先留空打印，测量纸上 20 mm 方框的实际边长。下一次把实测值填入，例如 19.5 mm，应用会按 20 / 19.5 计算修正系数。每次必须使用同一台打印机、纸张和打印设置。"
+                text = "首次打印先留空。之后输入上一张打印稿中 20 mm 方框的实测边长，例如 19.5 mm，应用会在当前修正系数基础上更新校准值。校准通过后，后续打印留空即可沿用修正系数。请保持打印机、纸张和打印设置一致。"
                 textSize = 11f
                 setPadding(dp(4), dp(2), dp(4), dp(4))
             })
+            addView(printScaleState)
+            addView(resetPrintScale)
             addView(calibrationInfo)
             addView(applyCorrection)
             addView(note)
@@ -1659,11 +1671,17 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, "校准框实测边长应为 16–24 毫米，首次打印可留空", Toast.LENGTH_LONG).show()
                     return@setPositiveButton
                 }
-                val printScaleCorrection = measuredSquareMm?.let { 20f / it } ?: 1f
-                if (measuredSquareMm != null) {
-                    getSharedPreferences("brow_print_calibration", Context.MODE_PRIVATE).edit()
-                        .putString("measured_square_mm", measuredSquareMm.toString()).apply()
+                val correctionBase = if (resetPrintScale.isChecked) 1f else
+                    getSharedPreferences("brow_print_calibration", Context.MODE_PRIVATE)
+                        .getFloat("scale_correction", 1f)
+                val printScaleCorrection = measuredSquareMm?.let { correctionBase * 20f / it } ?: correctionBase
+                if (printScaleCorrection !in 0.80f..1.25f) {
+                    Toast.makeText(this, "计算出的打印修正超出 0.80–1.25。请检查是否选择了实际尺寸、A4 纸张和正确的校准框，必要时重置比例。", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
                 }
+                getSharedPreferences("brow_print_calibration", Context.MODE_PRIVATE).edit()
+                    .putFloat("scale_correction", printScaleCorrection)
+                    .apply()
 
                 val pixelDistance = BrowRenderer.pupilDistance(points)
                 if (pixelDistance < 5f) {
