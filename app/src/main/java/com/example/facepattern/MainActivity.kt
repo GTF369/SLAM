@@ -1615,7 +1615,8 @@ class MainActivity : AppCompatActivity() {
         }
         val applyCorrection = CheckBox(this).apply {
             text = "应用此顾客已实测的区域长度修正（实验性）"
-            isChecked = measuredFactors.size == curvatureRegionNames.size
+            // This feature is not independently validated, so never enable it by default.
+            isChecked = false
             isEnabled = measuredFactors.size == curvatureRegionNames.size
         }
         val note = TextView(this).apply {
