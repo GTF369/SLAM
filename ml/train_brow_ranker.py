@@ -38,12 +38,18 @@ FEATURE_NAMES = [
     "arch",
     "style_soft",
     "style_defined",
+    "native_brow_area_fraction",
+    "native_brow_side_imbalance",
+    "native_brow_mask_available",
+    "native_shape_mode",
 ]
 REQUIRED = {
     "case_id", "style", "thickness", "length", "arch", "rating",
     "face_width_height_ratio", "interocular_face_width_ratio",
     "jaw_face_width_ratio", "brow_eye_distance_ratio",
     "brow_asymmetry_ratio", "eye_line_tilt",
+    "native_brow_area_fraction", "native_brow_side_imbalance",
+    "native_brow_mask_available", "native_shape_mode",
 }
 
 
@@ -78,6 +84,10 @@ def build_matrix(rows: list[dict[str, Any]], source: str = "CSV"):
             brow_eye_ratio = float(row["brow_eye_distance_ratio"])
             asymmetry = float(row["brow_asymmetry_ratio"])
             eye_tilt = float(row["eye_line_tilt"])
+            native_area = float(row["native_brow_area_fraction"])
+            native_side_imbalance = float(row["native_brow_side_imbalance"])
+            native_mask_available = float(row["native_brow_mask_available"])
+            native_shape_mode = float(row["native_shape_mode"])
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{source} row {row_num} has an invalid numeric value.") from exc
         values = [
@@ -85,9 +95,17 @@ def build_matrix(rows: list[dict[str, Any]], source: str = "CSV"):
             thickness, length, arch,
             1.0 if style == "soft" else 0.0,
             1.0 if style == "defined" else 0.0,
+            native_area,
+            native_side_imbalance,
+            native_mask_available,
+            native_shape_mode,
         ]
         if not all(math.isfinite(v) for v in values):
             raise ValueError(f"{source} row {row_num} contains NaN or infinity.")
+        if not (0.0 <= native_area <= 1.0 and 0.0 <= native_side_imbalance <= 1.0):
+            raise ValueError(f"{source} row {row_num} has out-of-range brow-mask fractions.")
+        if native_mask_available not in (0.0, 1.0) or native_shape_mode not in (0.0, 1.0):
+            raise ValueError(f"{source} row {row_num} must use 0/1 for mask availability and native shape mode.")
         if not math.isfinite(rating) or rating < 1 or rating > 5:
             raise ValueError(f"{source} row {row_num} rating must be in the 1–5 range.")
         features.append(values)
@@ -313,7 +331,7 @@ def main() -> None:
         release_approved = bool(args.mark_reviewed_after_human_review and all(gates.values()))
 
     payload = {
-        "model_version": 2,
+        "model_version": 3,
         "feature_order": FEATURE_NAMES,
         "means": [float(v) for v in scaler.mean_],
         "scales": [float(v) if float(v) != 0.0 else 1.0 for v in scaler.scale_],
