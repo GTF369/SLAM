@@ -26,12 +26,16 @@ The script rejects fewer than 30 distinct cases, keeps each `case_id` exclusivel
 Model input feature order is fixed and must remain aligned between Python and Kotlin:
 
 1. `face_width_height_ratio`
-2. `brow_asymmetry_ratio`
-3. `thickness`
-4. `length`
-5. `arch`
-6. `style_soft` (0/1)
-7. `style_defined` (0/1)
+2. `interocular_face_width_ratio`
+3. `jaw_face_width_ratio`
+4. `brow_eye_distance_ratio`
+5. `brow_asymmetry_ratio`
+6. `eye_line_tilt`
+7. `thickness`
+8. `length`
+9. `arch`
+10. `style_soft` (0/1)
+11. `style_defined` (0/1)
 
 Rating 4–5 is considered a positive preference label and rating 1–3 a negative label. `selected` is retained for audit/analysis but is not used as a model input or target. This is an exploratory preference model, not a model of clinical outcome and not proof that a particular brow shape is objectively best. A minimum of 30 cases is only a software guardrail. For commercial claims, gather a substantially larger dataset, evaluate by salon and demographic strata where appropriate, and conduct a prospective external test before deployment.
 
