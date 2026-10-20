@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import random
 import statistics
 from collections import defaultdict
@@ -41,7 +42,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("curvature_summary.csv"))
     args = parser.parse_args()
 
-    grouped: dict[str, list[tuple[str, float]]] = defaultdict(list)
+    grouped: dict[str, list[tuple[str, float, float | None]]] = defaultdict(list)
     legacy_without_case_id = False
     with args.csv.open("r", newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
@@ -64,8 +65,13 @@ def main() -> None:
                 # For legacy files without subject grouping, every row is treated as its own
                 # independent unit, and output explicitly warns that repeated measures cannot be clustered.
                 case_id = f"legacy-row-{row_num}"
+            try:
+                raw_radius = float(row.get("estimated_radius_mm", ""))
+                radius = raw_radius if math.isfinite(raw_radius) and raw_radius > 0 else None
+            except (TypeError, ValueError):
+                radius = None
             # Use recomputed ratios to guard against inconsistent stored factors.
-            grouped[row["region"].strip()].append((case_id, arc / chord))
+            grouped[row["region"].strip()].append((case_id, arc / chord, radius))
 
     if not grouped:
         raise SystemExit("No valid curvature measurements found.")
@@ -73,16 +79,21 @@ def main() -> None:
     fields = [
         "region", "n_measurements", "n_cases", "mean_measurement_factor", "median_factor",
         "p10_factor", "p90_factor", "sample_min", "sample_max",
-        "bootstrap_case_mean_ci95_low", "bootstrap_case_mean_ci95_high", "interpretation"
+        "n_radius_measurements", "median_estimated_radius_mm", "p10_estimated_radius_mm",
+        "p90_estimated_radius_mm", "bootstrap_case_mean_ci95_low",
+        "bootstrap_case_mean_ci95_high", "interpretation"
     ]
     with args.output.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         for region, rows in sorted(grouped.items()):
-            values = [value for _, value in rows]
+            values = [value for _, value, _ in rows]
             case_values: dict[str, list[float]] = defaultdict(list)
-            for case_id, value in rows:
+            radius_values: list[float] = []
+            for case_id, value, radius in rows:
                 case_values[case_id].append(value)
+                if radius is not None:
+                    radius_values.append(radius)
             # Average repeated measurements within each subject before resampling subjects.
             case_means = [statistics.fmean(items) for items in case_values.values()]
             low, high = bootstrap_mean_ci(case_means, seed=2026 + len(region))
@@ -104,6 +115,10 @@ def main() -> None:
                 "p90_factor": f"{quantile(values, 0.90):.5f}",
                 "sample_min": f"{min(values):.5f}",
                 "sample_max": f"{max(values):.5f}",
+                "n_radius_measurements": len(radius_values),
+                "median_estimated_radius_mm": f"{statistics.median(radius_values):.5f}" if radius_values else "",
+                "p10_estimated_radius_mm": f"{quantile(radius_values, 0.10):.5f}" if radius_values else "",
+                "p90_estimated_radius_mm": f"{quantile(radius_values, 0.90):.5f}" if radius_values else "",
                 "bootstrap_case_mean_ci95_low": f"{low:.5f}",
                 "bootstrap_case_mean_ci95_high": f"{high:.5f}",
                 "interpretation": "; ".join(warnings),
