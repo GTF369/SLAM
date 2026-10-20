@@ -1252,17 +1252,26 @@ class MainActivity : AppCompatActivity() {
                 }
                 old.put(item)
                 prefs.edit().putString("records", old.toString()).apply()
-                val samples = (0 until old.length()).mapNotNull { index ->
-                    old.optJSONObject(index)?.takeIf { it.optString("region") == region.selectedItem.toString() }
-                        ?.optDouble("factor")?.takeIf { it.isFinite() }
+                val factorsByCase = mutableMapOf<String, MutableList<Float>>()
+                for (index in 0 until old.length()) {
+                    val row = old.optJSONObject(index) ?: continue
+                    if (row.optString("region") != region.selectedItem.toString()) continue
+                    val caseId = row.optString("case_id").trim()
+                    val factorValue = row.optDouble("factor", Double.NaN)
+                    if (caseId.isBlank() || !factorValue.isFinite() || factorValue !in 1.0..1.5708) continue
+                    factorsByCase.getOrPut(caseId) { mutableListOf() }.add(factorValue.toFloat())
                 }
-                val interval = if (samples.size >= 5) {
-                    val sorted = samples.sorted()
+                // Collapse repeated measurements within the same anonymous client before
+                // reporting an empirical range, otherwise frequent repeat measurements
+                // would be incorrectly treated as independent customers.
+                val caseMeans = factorsByCase.values.map { values -> values.average().toFloat() }
+                val interval = if (caseMeans.size >= 30) {
+                    val sorted = caseMeans.sorted()
                     val low = sorted[((sorted.size - 1) * 0.10).toInt()]
                     val high = sorted[((sorted.size - 1) * 0.90).toInt()]
-                    "该区域已有 ${samples.size} 条记录，样本 10%–90% 分位区间约为 ${"%.3f".format(low)}–${"%.3f".format(high)}。这只是本机样本的经验区间，不代表人群通用区间。"
+                    "该区域已有 ${caseMeans.size} 位不同顾客。按顾客内重复测量取均值后，样本 P10–P90 经验区间约为 ${"%.3f".format(low)}–${"%.3f".format(high)}。这是当前样本的描述性区间，不是个体预测区间，也不代表通用解剖范围。"
                 } else {
-                    "该区域已记录 ${samples.size} 条样本。建议至少采集 30–50 个不同顾客的标准化记录，再评估区间稳定性。"
+                    "该区域已有 ${caseMeans.size} 位不同顾客的记录。至少需要约 30–50 位不同顾客才能初步评估人群区间，正式应用仍需独立测量与转印验证。"
                 }
                 val radiusText = if (estimatedRadiusMm == null) {
                     "半径估计不稳定，可能接近平坦"
