@@ -1361,21 +1361,79 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    private val curvatureRegionNames = listOf(
+        "左眉头", "左眉身", "左眉峰", "左眉尾",
+        "右眉头", "右眉身", "右眉峰", "右眉尾"
+    )
+
+    private fun currentCurvatureFactorsForPrint(): Map<String, Float> {
+        val records = org.json.JSONArray(
+            getSharedPreferences("brow_curvature_samples", Context.MODE_PRIVATE).getString("records", "[]")
+        )
+        val valuesByRegion = mutableMapOf<String, MutableList<Float>>()
+        for (i in 0 until records.length()) {
+            val row = records.optJSONObject(i) ?: continue
+            if (row.optString("case_id") != currentCaseId) continue
+            val region = row.optString("region")
+            val factor = row.optDouble("factor", Double.NaN).toFloat()
+            if (region !in curvatureRegionNames || !factor.isFinite() || factor !in 1.0f..1.5708f) continue
+            valuesByRegion.getOrPut(region) { mutableListOf() }.add(factor)
+        }
+        return valuesByRegion.mapValues { (_, factors) ->
+            val sorted = factors.sorted()
+            if (sorted.size % 2 == 1) sorted[sorted.size / 2]
+            else (sorted[sorted.size / 2 - 1] + sorted[sorted.size / 2]) / 2f
+        }
+    }
+
     private fun askPrintCalibration() {
         val points = browView.facePoints()
         if (points.size < 478 || capturedPhoto == null) {
             Toast.makeText(this, "未检测到完整虹膜关键点，暂时无法可靠建立 1:1 打印比例，请重新拍摄", Toast.LENGTH_LONG).show()
             return
         }
+        val measuredFactors = currentCurvatureFactorsForPrint()
         val input = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             hint = "请输入实测瞳距（毫米）"
             setText("")
         }
+        val calibrationInfo = TextView(this).apply {
+            text = "已记录当前顾客的曲率区域：${measuredFactors.size}/8。必须使用柔性尺测表面弧长，并测量同一段两端距离。"
+            textSize = 12f
+            setPadding(dp(4), dp(6), dp(4), dp(6))
+        }
+        val applyCorrection = CheckBox(this).apply {
+            text = "应用此顾客已实测的区域长度修正（实验性）"
+            isChecked = measuredFactors.size == curvatureRegionNames.size
+            isEnabled = measuredFactors.size == curvatureRegionNames.size
+        }
+        val note = TextView(this).apply {
+            text = "单张照片无法恢复完整三维眉弓。只有当前顾客的 8 个区域全部有实测值时，才可勾选实验性长度修正。修正不会替代打印后的 20 mm 校准。"
+            textSize = 11f
+            setPadding(dp(4), dp(2), dp(4), dp(2))
+        }
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(8), dp(18), 0)
+            addView(TextView(this@MainActivity).apply {
+                text = "1:1 打印校准"
+                textSize = 16f
+                setTextColor(0xFF262A22.toInt())
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "测量顾客两瞳孔中心的实际距离并输入毫米数。"
+                textSize = 12f
+            })
+            addView(input)
+            addView(calibrationInfo)
+            addView(applyCorrection)
+            addView(note)
+        }
         AlertDialog.Builder(this)
-            .setTitle("1:1 打印校准")
-            .setMessage("请先用尺测量顾客双眼瞳孔中心间的实际距离，并输入毫米数。默认值仅用于演示，不能代替实测。打印时选择 A4 与 100% / 实际尺寸，打印后量取页面中的 20 毫米方框，确认打印缩放无误。")
-            .setView(input)
+            .setTitle("生成 1:1 拓描模板")
+            .setMessage("打印时选择 A4 与 100% / 实际尺寸，关闭“适合页面”等自动缩放。打印后必须实测 20 mm 校准框。")
+            .setView(form)
             .setNegativeButton("取消", null)
             .setPositiveButton("生成打印模板") { _, _ ->
                 val measuredMm = input.text.toString().toFloatOrNull()
@@ -1388,17 +1446,25 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, "未能定位瞳孔，请重新拍摄正面照片", Toast.LENGTH_LONG).show()
                     return@setPositiveButton
                 }
-                val template = BrowRenderer.createTemplate(points, params, capturedPhoto!!.width, capturedPhoto!!.height)
+                val useCurvature = applyCorrection.isChecked
+                if (useCurvature && measuredFactors.size != curvatureRegionNames.size) {
+                    Toast.makeText(this, "8 个区域的实测值不完整，不能应用区域修正", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                val factorsToApply = if (useCurvature) measuredFactors else emptyMap()
+                val template = BrowRenderer.createTemplate(
+                    points, params, capturedPhoto!!.width, capturedPhoto!!.height, factorsToApply
+                )
                 if (template == null) {
                     Toast.makeText(this, "眉形模板生成失败，请重新拍摄", Toast.LENGTH_LONG).show()
                     return@setPositiveButton
                 }
-                printTemplate(template, pixelDistance / measuredMm)
+                printTemplate(template, pixelDistance / measuredMm, useCurvature)
             }
             .show()
     }
 
-    private fun printTemplate(template: Bitmap, pixelsPerMm: Float) {
+    private fun printTemplate(template: Bitmap, pixelsPerMm: Float, curvatureCorrected: Boolean = false) {
         val printManager = getSystemService(Context.PRINT_SERVICE) as PrintManager
         val jobName = "眉形拓描模板"
         val defaultAttributes = PrintAttributes.Builder()
@@ -1450,7 +1516,7 @@ class MainActivity : AppCompatActivity() {
                     val heightPts = template.height * pointsPerPixel
                     val calibrationPts = 20f * 72f / 25.4f
                     val gapPts = 12f
-                    val calibrationLabelHeightPts = 12f
+                    val calibrationLabelHeightPts = if (curvatureCorrected) 22f else 12f
                     val totalHeightPts = heightPts + gapPts + calibrationPts + calibrationLabelHeightPts
                     if (widthPts > content.width() || totalHeightPts > content.height()) {
                         document.finishPage(page)
@@ -1476,6 +1542,14 @@ class MainActivity : AppCompatActivity() {
                         style = Paint.Style.FILL
                     }
                     canvas.drawText("20 mm calibration", boxLeft + calibrationPts / 2f, boxTop + calibrationPts + 9f, labelPaint)
+                    if (curvatureCorrected) {
+                        canvas.drawText(
+                            "区域长度修正已启用（实验性）",
+                            content.centerX(),
+                            boxTop + calibrationPts + 20f,
+                            labelPaint
+                        )
+                    }
                     document.finishPage(page)
                     FileOutputStream(destination.fileDescriptor).use { document.writeTo(it) }
                     callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
