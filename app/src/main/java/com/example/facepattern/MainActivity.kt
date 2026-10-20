@@ -804,7 +804,7 @@ class MainActivity : AppCompatActivity() {
         recommendationLabel.text = BrowRecommendationEngine.sourceLabel(this)
         ranked.forEach { recommendation ->
             val button = Button(this).apply {
-                text = "${recommendation.name}\n参考分 ${recommendation.score}"
+                text = if (BrowRecommendationEngine.hasApprovedModel(this@MainActivity)) {\n                    "${recommendation.name}\\n偏好估计 ${recommendation.score}%"\n                } else {\n                    "${recommendation.name}\\n规则参考分 ${recommendation.score}"\n                }
                 textSize = 11f
                 minHeight = dp(52)
                 setPadding(dp(2), 0, dp(2), 0)
@@ -2007,7 +2007,9 @@ private object BrowRecommendationEngine {
         val means: FloatArray,
         val scales: FloatArray,
         val coefficients: FloatArray,
-        val intercept: Float
+        val intercept: Float,
+        val calibrationIntercept: Float,
+        val calibrationSlope: Float
     )
     private var loadAttempted = false
     private var trainedModel: TrainedModel? = null
@@ -2041,11 +2043,13 @@ private object BrowRecommendationEngine {
         )
     }
 
+    fun hasApprovedModel(context: Context): Boolean = loadModel(context) != null
+
     fun sourceLabel(context: Context): String =
         if (loadModel(context) != null) {
-            "已加载偏好模型。分数表示候选偏好得分，不是保证结果的概率，仍需顾客与纹绣师确认。"
+            "已启用经过独立顾客集校准、验证并完成人工审核的偏好估计模型。分数表示顾客给出 4–5 分评价的估计倾向，不代表客观审美或治疗效果保证。"
         } else {
-            "当前使用几何规则参考分，非训练后的 AI 概率。采集匿名偏好反馈并经验证后，可加载 brow_ranker.json。"
+            "当前使用几何规则参考分，并非 AI 概率。偏好模型只有经过独立校准、外部顾客验证和人工审核后才会启用。"
         }
 
     fun rank(context: Context, points: List<PointF>): List<BrowRecommendation> {
@@ -2057,21 +2061,46 @@ private object BrowRecommendationEngine {
         )
         val model = loadModel(context)
         if (model != null) {
-            return templates.map { option ->
-                val x = floatArrayOf(
-                    features.widthHeightRatio,
-                    features.interocularFaceWidthRatio,
-                    features.jawFaceWidthRatio,
-                    features.browEyeDistanceRatio,
-                    features.browAsymmetryRatio,
-                    features.eyeLineTilt,
-                    option.params.thickness,
-                    option.params.length,
-                    option.params.arch,
-                    if (option.params.style == 1) 1f else 0f,
-                    if (option.params.style == 2) 1f else 0f
-                )
-                option.copy(score = (predict(model, x) * 100f).roundToInt().coerceIn(0, 100))
+            // Search a small, bounded parameter grid within each style family. This
+            // personalizes thickness, length and arch only through a reviewed model.
+            // Without a reviewed model the app does not pretend these are learned parameters.
+            val offsets = listOf(-0.12f, 0f, 0.12f)
+            return templates.map { family ->
+                val candidates = mutableListOf<BrowRecommendation>()
+                for (thicknessDelta in offsets) {
+                    for (lengthDelta in listOf(-0.06f, 0f, 0.06f)) {
+                        for (archDelta in offsets) {
+                            val candidateParams = family.params.copy(
+                                thickness = (family.params.thickness + thicknessDelta).coerceIn(0.55f, 1.45f),
+                                length = (family.params.length + lengthDelta).coerceIn(0.80f, 1.20f),
+                                arch = (family.params.arch + archDelta).coerceIn(0.55f, 1.45f)
+                            )
+                            val x = floatArrayOf(
+                                features.widthHeightRatio,
+                                features.interocularFaceWidthRatio,
+                                features.jawFaceWidthRatio,
+                                features.browEyeDistanceRatio,
+                                features.browAsymmetryRatio,
+                                features.eyeLineTilt,
+                                candidateParams.thickness,
+                                candidateParams.length,
+                                candidateParams.arch,
+                                if (candidateParams.style == 1) 1f else 0f,
+                                if (candidateParams.style == 2) 1f else 0f
+                            )
+                            val preference = predict(model, x)
+                            candidates.add(
+                                family.copy(
+                                    name = "${family.name}·自适应",
+                                    score = (preference * 100f).roundToInt().coerceIn(0, 100),
+                                    params = candidateParams,
+                                    reason = "${family.name}：参数组合经已审核的顾客偏好模型排序，仍需顾客和纹绣师确认"
+                                )
+                            )
+                        }
+                    }
+                }
+                candidates.maxBy { it.score }
             }.sortedByDescending { it.score }
         }
         val shapeSignal = ((features.widthHeightRatio - 0.72f) / 0.18f).coerceIn(-1f, 1f)
@@ -2089,7 +2118,23 @@ private object BrowRecommendationEngine {
         return try {
             val json = context.assets.open("brow_ranker.json").bufferedReader(Charsets.UTF_8).use { it.readText() }
             val root = org.json.JSONObject(json)
-            if (root.optInt("model_version", -1) != 1) return null
+            // Only a model explicitly human-reviewed after independent calibration and
+            // external validation may provide percentages in the live app.
+            if (root.optInt("model_version", -1) != 2) return null
+            if (!root.optBoolean("release_approved", false)) return null
+            if (root.optString("calibration_status") != "platt_scaling") return null
+            val external = root.optJSONObject("external_validation") ?: return null
+            val gates = external.optJSONObject("release_gates") ?: return null
+            if (external.optInt("n_cases", 0) < 100 ||
+                external.optDouble("roc_auc", 0.0) < 0.60 ||
+                external.optDouble("brier_score", Double.POSITIVE_INFINITY) >=
+                    external.optDouble("prevalence_baseline_brier_score", 0.0) ||
+                external.optDouble("expected_calibration_error_10_bins", Double.POSITIVE_INFINITY) > 0.10 ||
+                !external.optBoolean("passed_release_gates", false) ||
+                !gates.optBoolean("external_cases_at_least_100", false) ||
+                !gates.optBoolean("roc_auc_at_least_0_60", false) ||
+                !gates.optBoolean("brier_better_than_prevalence_baseline", false) ||
+                !gates.optBoolean("ece_at_most_0_10", false)) return null
             val expectedFeatures = listOf(
                 "face_width_height_ratio",
                 "interocular_face_width_ratio",
@@ -2116,7 +2161,9 @@ private object BrowRecommendationEngine {
                 FloatArray(11) { meansJson.getDouble(it).toFloat() },
                 FloatArray(11) { scalesJson.getDouble(it).toFloat().let { scale -> if (abs(scale) < 1e-8f) 1f else scale } },
                 FloatArray(11) { coefficientsJson.getDouble(it).toFloat() },
-                root.getDouble("intercept").toFloat()
+                root.getDouble("intercept").toFloat(),
+                root.getDouble("calibration_intercept").toFloat(),
+                root.getDouble("calibration_slope").toFloat()
             )
             trainedModel
         } catch (_: Exception) {
@@ -2131,7 +2178,10 @@ private object BrowRecommendationEngine {
             logit += model.coefficients[i] * scaled
         }
         val bounded = logit.coerceIn(-20f, 20f)
-        return (1f / (1f + kotlin.math.exp(-bounded)))
+        val calibratedLogit = (
+            model.calibrationIntercept + model.calibrationSlope * bounded
+        ).coerceIn(-20f, 20f)
+        return (1f / (1f + kotlin.math.exp(-calibratedLogit)))
     }
 
     private fun distance(a: PointF, b: PointF): Float =
