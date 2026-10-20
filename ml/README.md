@@ -7,6 +7,17 @@ The Android app can export two separate CSV files into `Downloads/BrowDesign` on
 
 The app does not export face photos in either data file. Obtain informed permission for collecting preference or measurement data, minimize retention, and avoid putting names, phone numbers, appointment IDs, or other identifying data into exported files.
 
+## Commercial data licensing
+
+Do not assume a public face dataset can be used commercially. For example, the official CelebAMask-HQ agreement explicitly limits the images and derived data to non-commercial research and prohibits commercial exploitation. See the [official dataset page](https://mmlab.ie.cuhk.edu.hk/projects/CelebA/CelebAMask_HQ.html). Do not use it to train this product unless the rights holder grants a separate written commercial license.
+
+For product training, prefer:
+- consented, purpose-limited salon images and annotations with documented authorization for model training and evaluation;
+- a separately licensed dataset whose written terms expressly allow commercial model training, derivation of weights, deployment, and the target regions;
+- a data processing and retention policy matching the target market.
+
+Keep a dataset register with source, license/consent basis, permitted uses, collection date, annotation version, permitted retention, and deletion status. A dataset being downloadable or marked "open" is not proof that commercial use is permitted.
+
 ## 1. Preference model
 
 Install Python dependencies:
