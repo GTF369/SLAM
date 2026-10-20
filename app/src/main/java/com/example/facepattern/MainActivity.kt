@@ -830,6 +830,10 @@ class MainActivity : AppCompatActivity() {
         normalizedDepths: List<Float> = emptyList()
     ) {
         stopTransition()
+        // A stable random anonymous ID belongs to one customer/design session.
+        // Generating it only once per Activity would merge unrelated customers in
+        // the feedback and curvature datasets, corrupting customer-level validation.
+        currentCaseId = UUID.randomUUID().toString().take(8)
         segmentationGeneration++
         savedPlans.forEach { it.segmentationSnapshot?.overlay?.recycle() }
         savedPlans.clear()
