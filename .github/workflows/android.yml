@@ -20,7 +20,11 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.9'
+          gradle-version: '8.13'
+      - name: Install Android SDK API 36
+        run: |
+          sdkmanager --licenses
+          sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
       - name: Download MediaPipe face model
         run: |
           mkdir -p app/src/main/assets
