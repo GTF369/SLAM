@@ -137,6 +137,16 @@ def main() -> None:
         "roc_auc": float(roc_auc_score(y[test_idx], scores)),
         "note": "Exploratory only. Scores are not clinically or statistically calibrated probabilities.",
     }
+    # The holdout metrics above remain tied to models fitted only on training cases.
+    # Once that assessment is recorded, refit the deployable candidate on all available
+    # consented cases so the final JSON does not discard the grouped holdout observations.
+    scaler = StandardScaler()
+    x_all = scaler.fit_transform(x)
+    model = LogisticRegression(max_iter=2000, class_weight="balanced", random_state=args.seed)
+    model.fit(x_all, y)
+    metrics["candidate_fit_scope"] = "Refit on all available cases after grouped holdout evaluation"
+    metrics["holdout_metrics_are_from_final_all_data_fit"] = False
+
     payload = {
         "model_version": 1,
         "feature_order": FEATURE_NAMES,
