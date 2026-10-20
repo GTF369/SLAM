@@ -599,6 +599,9 @@ class MainActivity : AppCompatActivity() {
     private fun enterDesignMode(photo: Bitmap, photoPoints: List<PointF>) {
         stopTransition()
         currentCaseId = UUID.randomUUID().toString()
+        // Do not carry one customer's candidate plans into the next customer's session.
+        savedPlans.clear()
+        if (::plansRow.isInitialized) refreshPlanButtons()
         capturedPhoto?.recycle()
         capturedPhoto = photo
         designMode = true
@@ -891,6 +894,11 @@ class MainActivity : AppCompatActivity() {
                 listOf("左眉头", "左眉身", "左眉峰", "左眉尾", "右眉头", "右眉身", "右眉峰", "右眉尾")
             )
         }
+        val caseIdField = EditText(this).apply {
+            hint = "匿名顾客编号（同一顾客复测请沿用）"
+            setSingleLine(true)
+            setText(currentCaseId.take(8))
+        }
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(8), dp(18), 0)
@@ -898,6 +906,7 @@ class MainActivity : AppCompatActivity() {
                 text = "用于建立个体和区域的实测曲率数据。用柔性尺测量皮肤表面弧长，同时记录同一段两端的直线距离。不要用照片像素代替实测毫米。"
                 textSize = 13f
             })
+            addView(caseIdField)
             addView(region)
             addView(chord)
             addView(field)
@@ -916,7 +925,9 @@ class MainActivity : AppCompatActivity() {
                 val factor = arcMm / chordMm
                 val prefs = getSharedPreferences("brow_curvature_samples", Context.MODE_PRIVATE)
                 val old = org.json.JSONArray(prefs.getString("records", "[]"))
+                val enteredCaseId = caseIdField.text.toString().trim().ifBlank { currentCaseId.take(8) }
                 val item = org.json.JSONObject().apply {
+                    put("case_id", enteredCaseId)
                     put("region", region.selectedItem.toString())
                     put("arc_mm", arcMm.toDouble())
                     put("chord_mm", chordMm.toDouble())
@@ -950,9 +961,10 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val csv = buildString {
-            append("region,arc_mm,chord_mm,correction_factor,timestamp\n")
+            append("case_id,region,arc_mm,chord_mm,correction_factor,timestamp\n")
             for (i in 0 until records.length()) {
                 val row = records.optJSONObject(i) ?: continue
+                append(row.optString("case_id")).append(',')
                 append(row.optString("region")).append(',')
                 append(row.optDouble("arc_mm")).append(',')
                 append(row.optDouble("chord_mm")).append(',')
@@ -1012,7 +1024,7 @@ class MainActivity : AppCompatActivity() {
         }
         val selected = CheckBox(this).apply {
             text = "顾客最终选择此方案"
-            isChecked = true
+            isChecked = false
         }
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
