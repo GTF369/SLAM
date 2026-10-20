@@ -36,6 +36,22 @@ def bootstrap_mean_ci(values: list[float], seed: int = 2026, draws: int = 5000) 
     return quantile(means, 0.025), quantile(means, 0.975)
 
 
+
+def case_balanced_summaries(
+    rows: list[tuple[str, float, float | None]],
+) -> tuple[list[float], list[float]]:
+    """Collapse repeated measurements within each case before population summaries."""
+    factors_by_case: dict[str, list[float]] = defaultdict(list)
+    radii_by_case: dict[str, list[float]] = defaultdict(list)
+    for case_id, factor, radius in rows:
+        factors_by_case[case_id].append(factor)
+        if radius is not None:
+            radii_by_case[case_id].append(radius)
+    factor_means = [statistics.fmean(items) for items in factors_by_case.values()]
+    radius_means = [statistics.fmean(items) for items in radii_by_case.values()]
+    return factor_means, radius_means
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("csv", type=Path, help="Curvature calibration CSV exported from the app")
@@ -87,17 +103,11 @@ def main() -> None:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         for region, rows in sorted(grouped.items()):
-            values = [value for _, value, _ in rows]
-            case_values: dict[str, list[float]] = defaultdict(list)
-            radius_values: list[float] = []
-            for case_id, value, radius in rows:
-                case_values[case_id].append(value)
-                if radius is not None:
-                    radius_values.append(radius)
-            # Average repeated measurements within each subject before resampling subjects.
-            case_means = [statistics.fmean(items) for items in case_values.values()]
+            # Each customer contributes one case-level mean to population summaries.
+            # This prevents customers with more repeated measurements from dominating the interval.
+            case_means, radius_case_means = case_balanced_summaries(rows)
             low, high = bootstrap_mean_ci(case_means, seed=2026 + len(region))
-            n = len(values)
+            n = len(rows)
             n_cases = len(case_means)
             warnings = []
             if n_cases < 30:
@@ -109,22 +119,22 @@ def main() -> None:
                 "region": region,
                 "n_measurements": n,
                 "n_cases": n_cases,
-                "mean_measurement_factor": f"{statistics.fmean(values):.5f}",
-                "median_factor": f"{statistics.median(values):.5f}",
-                "p10_factor": f"{quantile(values, 0.10):.5f}",
-                "p90_factor": f"{quantile(values, 0.90):.5f}",
-                "sample_min": f"{min(values):.5f}",
-                "sample_max": f"{max(values):.5f}",
-                "n_radius_measurements": len(radius_values),
-                "median_estimated_radius_mm": f"{statistics.median(radius_values):.5f}" if radius_values else "",
-                "p10_estimated_radius_mm": f"{quantile(radius_values, 0.10):.5f}" if radius_values else "",
-                "p90_estimated_radius_mm": f"{quantile(radius_values, 0.90):.5f}" if radius_values else "",
+                "mean_measurement_factor": f"{statistics.fmean(case_means):.5f}",
+                "median_factor": f"{statistics.median(case_means):.5f}",
+                "p10_factor": f"{quantile(case_means, 0.10):.5f}",
+                "p90_factor": f"{quantile(case_means, 0.90):.5f}",
+                "sample_min": f"{min(case_means):.5f}",
+                "sample_max": f"{max(case_means):.5f}",
+                "n_radius_measurements": sum(1 for _, _, radius in rows if radius is not None),
+                "median_estimated_radius_mm": f"{statistics.median(radius_case_means):.5f}" if radius_case_means else "",
+                "p10_estimated_radius_mm": f"{quantile(radius_case_means, 0.10):.5f}" if radius_case_means else "",
+                "p90_estimated_radius_mm": f"{quantile(radius_case_means, 0.90):.5f}" if radius_case_means else "",
                 "bootstrap_case_mean_ci95_low": f"{low:.5f}",
                 "bootstrap_case_mean_ci95_high": f"{high:.5f}",
                 "interpretation": "; ".join(warnings),
             })
     print(f"Wrote {args.output}")
-    print("P10–P90 describe measurement rows. The bootstrap confidence interval resamples anonymous cases after averaging repeated measurements within each case.")
+    print("P10–P90 describe case-level averages, not individual anatomical guarantees. The bootstrap confidence interval resamples anonymous cases after averaging repeated measurements within each case.")
     if legacy_without_case_id:
         print("WARNING: input lacked case_id, so old rows were treated as distinct cases. Confidence intervals may be overconfident if a person has repeated records.")
     print("These statistics are not guaranteed anatomical limits or individual prediction bounds. Do not apply a region-level factor clinically until measurement repeatability and independent validation are established.")
