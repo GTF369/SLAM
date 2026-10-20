@@ -21,13 +21,18 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
-      - name: Set up Android SDK command-line tools
-        uses: android-actions/setup-android@v3
-
       - name: Install Android SDK API 36
+        shell: bash
         run: |
-          sdkmanager --licenses
-          sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager 2>/dev/null | sort -V | tail -n 1)"
+          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
+            echo "::error::Unable to locate Android SDK sdkmanager under $SDK_ROOT/cmdline-tools"
+            exit 1
+          fi
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --install "platforms;android-36" "build-tools;36.0.0"
       - name: Download MediaPipe face model
         run: |
           mkdir -p app/src/main/assets
