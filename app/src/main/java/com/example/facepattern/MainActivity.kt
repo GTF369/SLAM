@@ -301,6 +301,9 @@ class MainActivity : AppCompatActivity() {
             "导出原始标注照片" to { exportOriginalPhotoForAnnotation() }
         ))
         addButtonRow(designControls, listOf(
+            "模型来源与许可" to { showModelLicenseNotice() }
+        ))
+        addButtonRow(designControls, listOf(
             "顾客偏好" to { recordPreference() },
             "导出偏好数据" to { exportPreferenceCsv() },
             "清除本机记录" to { clearLocalRecords() }
@@ -1491,6 +1494,28 @@ class MainActivity : AppCompatActivity() {
                     .apply()
                 Toast.makeText(this, "已保存匿名偏好记录，可导出 CSV 用于后续模型训练", Toast.LENGTH_LONG).show()
             }
+            .show()
+    }
+
+    private fun showModelLicenseNotice() {
+        val notice = try {
+            assets.open("THIRD_PARTY_MODEL_NOTICES.txt").bufferedReader(Charsets.UTF_8).use { it.readText() }
+        } catch (_: Exception) {
+            "无法读取模型来源说明。请查阅项目仓库中的 docs/MODEL_PROVENANCE.md。"
+        }
+        val body = TextView(this).apply {
+            text = notice
+            textSize = 12f
+            setTextIsSelectable(true)
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+        }
+        val scroll = ScrollView(this).apply {
+            addView(body)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("模型来源与许可")
+            .setView(scroll)
+            .setPositiveButton("关闭", null)
             .show()
     }
 
