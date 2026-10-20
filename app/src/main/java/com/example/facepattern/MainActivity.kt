@@ -52,6 +52,8 @@ import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -309,6 +311,11 @@ class MainActivity : AppCompatActivity() {
                     val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
                     val stillCapture = ImageCapture.Builder()
                         .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                        .setResolutionSelector(
+                            ResolutionSelector.Builder()
+                                .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+                                .build()
+                        )
                         .setTargetRotation(previewView.display?.rotation ?: android.view.Surface.ROTATION_0)
                         .build()
                     imageCapture = stillCapture
@@ -1205,7 +1212,8 @@ class MainActivity : AppCompatActivity() {
                     val heightPts = template.height * pointsPerPixel
                     val calibrationPts = 20f * 72f / 25.4f
                     val gapPts = 12f
-                    val totalHeightPts = heightPts + gapPts + calibrationPts
+                    val calibrationLabelHeightPts = 12f
+                    val totalHeightPts = heightPts + gapPts + calibrationPts + calibrationLabelHeightPts
                     if (widthPts > content.width() || totalHeightPts > content.height()) {
                         document.finishPage(page)
                         callback.onWriteFailed("模板及 20 毫米校准框超过 A4 可打印范围，请检查瞳距和照片比例")
@@ -1223,6 +1231,13 @@ class MainActivity : AppCompatActivity() {
                         strokeWidth = 0.6f
                     }
                     canvas.drawRect(RectF(boxLeft, boxTop, boxLeft + calibrationPts, boxTop + calibrationPts), calibrationPaint)
+                    val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color = Color.BLACK
+                        textSize = 8f
+                        textAlign = Paint.Align.CENTER
+                        style = Paint.Style.FILL
+                    }
+                    canvas.drawText("20 mm calibration", boxLeft + calibrationPts / 2f, boxTop + calibrationPts + 9f, labelPaint)
                     document.finishPage(page)
                     FileOutputStream(destination.fileDescriptor).use { document.writeTo(it) }
                     callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
