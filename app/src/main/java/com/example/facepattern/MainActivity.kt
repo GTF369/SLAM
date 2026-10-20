@@ -1572,7 +1572,7 @@ class MainActivity : AppCompatActivity() {
             .setView(form)
             .setNegativeButton("取消", null)
             .setPositiveButton("保存反馈") { _, _ ->
-                val features = BrowRecommendationEngine.measurements(points)
+                val features = BrowRecommendationEngine.measurements(points, segmentationResult, segmentationReviewed, useNativeShape)
                 val dataset = org.json.JSONArray(
                     getSharedPreferences("brow_preference_feedback", Context.MODE_PRIVATE).getString("records", "[]")
                 )
@@ -1594,6 +1594,10 @@ class MainActivity : AppCompatActivity() {
                     put("brow_eye_distance_ratio", features.browEyeDistanceRatio.toDouble())
                     put("brow_asymmetry_ratio", features.browAsymmetryRatio.toDouble())
                     put("eye_line_tilt", features.eyeLineTilt.toDouble())
+                    put("native_brow_area_fraction", features.nativeBrowAreaFraction.toDouble())
+                    put("native_brow_side_imbalance", features.nativeBrowSideImbalance.toDouble())
+                    put("native_brow_mask_available", features.nativeBrowMaskAvailable.toDouble())
+                    put("native_shape_mode", features.nativeShapeMode.toDouble())
                     put("timestamp", System.currentTimeMillis())
                 }
                 dataset.put(item)
@@ -1636,7 +1640,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val csv = buildString {
-            append("case_id,style,thickness,length,arch,rating,selected,face_width_height_ratio,interocular_face_width_ratio,jaw_face_width_ratio,brow_eye_distance_ratio,brow_asymmetry_ratio,eye_line_tilt,timestamp\n")
+            append("case_id,style,thickness,length,arch,rating,selected,face_width_height_ratio,interocular_face_width_ratio,jaw_face_width_ratio,brow_eye_distance_ratio,brow_asymmetry_ratio,eye_line_tilt,native_brow_area_fraction,native_brow_side_imbalance,native_brow_mask_available,native_shape_mode,timestamp\n")
             for (i in 0 until records.length()) {
                 val row = records.optJSONObject(i) ?: continue
                 append(row.optString("case_id")).append(',')
@@ -1652,6 +1656,10 @@ class MainActivity : AppCompatActivity() {
                 append(row.optDouble("brow_eye_distance_ratio")).append(',')
                 append(row.optDouble("brow_asymmetry_ratio")).append(',')
                 append(row.optDouble("eye_line_tilt")).append(',')
+                append(row.optDouble("native_brow_area_fraction")).append(',')
+                append(row.optDouble("native_brow_side_imbalance")).append(',')
+                append(row.optDouble("native_brow_mask_available")).append(',')
+                append(row.optDouble("native_shape_mode")).append(',')
                 append(row.optLong("timestamp")).append('\n')
             }
         }
