@@ -925,7 +925,11 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("取消", null)
             .setPositiveButton("保存") { _, _ ->
                 val name = input.text.toString().trim().ifBlank { "方案 " + (savedPlans.size + 1) }
-                savedPlans.add(BrowPlan(name, params.copy()))
+                val maskSnapshot = segmentationResult?.let { result ->
+                    if (result.overlay.isRecycled) null
+                    else result.copy(overlay = result.overlay.copy(Bitmap.Config.ARGB_8888, true))
+                }
+                savedPlans.add(BrowPlan(name, params.copy(), useNativeShape, maskSnapshot))
                 refreshPlanButtons()
                 status.text = "已保存 " + name + "，可以继续调整并保存其他版本"
             }
@@ -946,10 +950,20 @@ class MainActivity : AppCompatActivity() {
                 setOnClickListener {
                     stopTransition()
                     history.add(params.copy())
+                    segmentationResult?.overlay?.recycle()
+                    segmentationResult = plan.segmentationSnapshot?.let { snapshot ->
+                        if (snapshot.overlay.isRecycled) null
+                        else snapshot.copy(overlay = snapshot.overlay.copy(Bitmap.Config.ARGB_8888, true))
+                    }
+                    showNativeSegmentation = false
+                    useNativeShape = plan.useNativeShape && segmentationResult != null
+                    browView.setSegmentationResult(segmentationResult, false)
+                    browView.setNativeShapeMode(useNativeShape)
+                    history.add(params.copy())
                     params = plan.params.copy()
                     browView.setParams(params)
                     syncSliders()
-                    status.text = "正在预览：" + plan.name
+                    status.text = if (useNativeShape) "正在预览：${plan.name}（原生眉形轮廓）" else "正在预览：" + plan.name
                 }
                 setOnLongClickListener {
                     AlertDialog.Builder(this@MainActivity)
@@ -958,7 +972,7 @@ class MainActivity : AppCompatActivity() {
                         .setNegativeButton("取消", null)
                         .setPositiveButton("删除") { _, _ ->
                             if (index in savedPlans.indices) {
-                                savedPlans.removeAt(index)
+                                savedPlans.removeAt(index).segmentationSnapshot?.overlay?.recycle()
                                 refreshPlanButtons()
                                 status.text = "已删除方案，可继续保存其他版本"
                             }
@@ -992,7 +1006,9 @@ class MainActivity : AppCompatActivity() {
                 setPadding(dp(4), dp(4), dp(4), dp(4))
             }
             val image = ImageView(this).apply {
-                setImageBitmap(BrowRenderer.renderPreview(photo, points, plan.params, 300))
+                setImageBitmap(BrowRenderer.renderPreview(
+                    photo, points, plan.params, 300, plan.segmentationSnapshot, plan.useNativeShape
+                ))
                 scaleType = ImageView.ScaleType.FIT_CENTER
                 contentDescription = plan.name
             }
@@ -1075,7 +1091,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val preview = try {
-            BrowRenderer.renderPreview(photo, browView.facePoints(), params, photo.width)
+            BrowRenderer.renderPreview(
+                photo, browView.facePoints(), params, photo.width, segmentationResult, useNativeShape
+            )
         } catch (e: Exception) {
             Toast.makeText(this, "生成效果图失败：" + (e.message ?: "请重试"), Toast.LENGTH_LONG).show()
             return
@@ -1496,6 +1514,7 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("清除") { _, _ ->
                 getSharedPreferences("brow_preference_feedback", Context.MODE_PRIVATE).edit().clear().apply()
                 getSharedPreferences("brow_curvature_samples", Context.MODE_PRIVATE).edit().clear().apply()
+                savedPlans.forEach { it.segmentationSnapshot?.overlay?.recycle() }
                 savedPlans.clear()
                 refreshPlanButtons()
                 Toast.makeText(this, "应用内匿名记录已清除", Toast.LENGTH_LONG).show()
@@ -1595,7 +1614,13 @@ class MainActivity : AppCompatActivity() {
                 }
                 val factorsToApply = if (useCurvature) measuredFactors else emptyMap()
                 val template = BrowRenderer.createTemplate(
-                    points, params, capturedPhoto!!.width, capturedPhoto!!.height, factorsToApply
+                    points,
+                    params,
+                    capturedPhoto!!.width,
+                    capturedPhoto!!.height,
+                    factorsToApply,
+                    segmentationResult,
+                    useNativeShape
                 )
                 if (template == null) {
                     Toast.makeText(this, "眉形模板生成失败，请重新拍摄", Toast.LENGTH_LONG).show()
