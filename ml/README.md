@@ -35,9 +35,9 @@ python ml/train_brow_ranker.py ml/data_splits/development.csv \
   --output app/src/main/assets/brow_ranker.json
 ```
 
-The base training refuses fewer than 30 development cases. The calibration set must contain at least 50 distinct customers and the external validation set at least 100 distinct customers. These are early engineering gates, not a statistical guarantee that the model is production ready. Same-customer rows are kept within one dataset, and the three dataset case IDs must not overlap.
+The base training refuses fewer than 30 development cases. The calibration set must contain at least 50 distinct customers and the external validation set at least 100 distinct customers. These are early engineering gates, not a statistical guarantee that the model is production ready. Same-customer rows are kept within one dataset, and the three dataset case IDs must not overlap. External validation also compares the candidate against the app's current geometry-rule baseline, with a paired customer-cluster bootstrap interval for AUC and the AUC gain. For release, the 95% AUC interval must be above chance and the 95% interval for the AUC gain over the geometry baseline must be entirely positive.
 
-The output JSON is a **candidate only**. Review the grouped holdout and external metrics, confirm that the validation population resembles intended salons/customers, investigate errors and subgroup performance, and have a qualified reviewer sign off. Only then may you explicitly mark the candidate reviewed:
+The output JSON is a **candidate only**. Review the grouped holdout and external metrics, confirm that the validation population resembles intended salons/customers, investigate errors and subgroup performance, inspect the customer-cluster bootstrap interval, and have a qualified reviewer sign off. Only then may you explicitly mark the candidate reviewed:
 
 ```bash
 python ml/train_brow_ranker.py development.csv \
@@ -47,7 +47,7 @@ python ml/train_brow_ranker.py development.csv \
   --output app/src/main/assets/brow_ranker.json
 ```
 
-That command also requires the external data to meet preliminary engineering gates: ROC AUC at least 0.60, Brier score better than the constant-prevalence baseline and 10-bin expected calibration error at most 0.10. Those cutoffs are screening rules, not industry standards and not proof of fairness or aesthetic correctness. A model JSON must not be marked reviewed just to enable the app.
+That command also requires the external data to meet preliminary engineering gates: ROC AUC at least 0.60, the lower 95% customer-cluster bootstrap AUC bound above 0.50, the lower 95% bound for AUC improvement over the geometry-rule baseline above zero, Brier score better than the constant-prevalence baseline and 10-bin expected calibration error at most 0.10. Those cutoffs are screening rules, not industry standards and not proof of fairness or aesthetic correctness. A model JSON must not be marked reviewed just to enable the app.
 
 Only a version-2 JSON explicitly marked `release_approved: true`, with a separate Platt calibrator and passing external metrics, will be loaded by Android. The live percentage estimates the probability that a candidate receives a 4–5 rating under the collected feedback process. It does **not** mean objective beauty, universal suitability, or a guaranteed treatment result. When no reviewed model is present, the app continues to use geometric reference scores and clearly labels them as such.
 
