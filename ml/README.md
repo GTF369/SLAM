@@ -2,7 +2,7 @@
 
 The Android app exports anonymous preference feedback and separate curvature measurements to `Downloads/BrowDesign` on Android 10 and later. The preference CSV records candidate type/parameters, face geometry ratios, a 1–5 customer rating and the selected flag. The curvature CSV records region, measured skin-surface arc length, chord length, correction ratio and timestamp. No face photo is included in these CSVs.
 
-Collect and export such data only after appropriate consent for the stated use. Keep a data register and avoid names, phone numbers, appointment numbers and any identifiers that can reveal a customer. Exported case IDs must be stable per customer across that customer's candidate rows but must not identify the person.
+Collect and export such data only after appropriate consent for the stated use. Keep a data register and avoid names, phone numbers, appointment numbers and any identifiers that can reveal a customer. Use the app's **匿名案例编号** control to reuse the same random pseudonymous code for all candidate designs, retakes and follow-up measurements from the same customer when those records are authorized for the same study. Generate a new code for a different customer. If you use a new code on every retake for the same customer, grouped evaluation can leak repeated-customer preferences across splits. Exported case IDs must be stable per customer but must not identify the person.
 
 ## 1. Preference model: development, calibration, and external test
 
