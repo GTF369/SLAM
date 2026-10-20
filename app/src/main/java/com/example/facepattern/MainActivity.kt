@@ -527,6 +527,21 @@ class MainActivity : AppCompatActivity() {
                     syncSliders()
                     status.text = "正在预览：" + plan.name
                 }
+                setOnLongClickListener {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("移除方案")
+                        .setMessage("确定删除“${plan.name}”吗？")
+                        .setNegativeButton("取消", null)
+                        .setPositiveButton("删除") { _, _ ->
+                            if (index in savedPlans.indices) {
+                                savedPlans.removeAt(index)
+                                refreshPlanButtons()
+                                status.text = "已删除方案，可继续保存其他版本"
+                            }
+                        }
+                        .show()
+                    true
+                }
             }
             plansRow.addView(b, LinearLayout.LayoutParams(0, dp(40), 1f).apply {
                 setMargins(dp(2), dp(2), dp(2), dp(2))
