@@ -1292,7 +1292,7 @@ class MainActivity : AppCompatActivity() {
         val existing = segmentationResult
         if (existing != null) {
             browView.setSegmentationResult(existing, true)
-            segmentationLabel.text = "识别方式：${existing.method} · 参考置信度 ${(existing.confidence * 100).toInt()}% · 请检查识别边界"
+            segmentationLabel.text = "识别方式：${existing.method} · 掩膜质量提示 ${(existing.maskQualityScore * 100).toInt()}%（启发式指标，非模型置信概率）· 请检查识别边界"
         } else {
             runSegmentation()
         }
@@ -1359,7 +1359,7 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     browView.setSegmentationResult(result, showNativeSegmentation)
                     browView.setNativeShapeMode(useNativeShape)
-                    segmentationLabel.text = "识别方式：${result.method} · 参考置信度 ${(result.confidence * 100).toInt()}% · 识别像素 ${result.selectedPixelCount} · 请人工检查边界"
+                    segmentationLabel.text = "识别方式：${result.method} · 掩膜质量提示 ${(result.maskQualityScore * 100).toInt()}%（按像素占比估算，非模型置信概率）· 识别像素 ${result.selectedPixelCount} · 请人工检查边界"
                 }
             }
         }
