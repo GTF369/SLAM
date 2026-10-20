@@ -22,16 +22,27 @@ internal data class BrowSegmentationResult(
     val regions: List<IntArray>
 )
 
+private data class FaceParsingMap(
+    val labels: ByteArray,
+    val cropLeft: Int,
+    val cropTop: Int,
+    val cropSize: Int
+)
+
 /**
  * Brow-region pre-segmentation.
  *
- * When a customer-trained brow_segmentation.tflite model is present, it is used.
- * Otherwise this falls back to an adaptive dark-hair contrast mask. The fallback
- * is intentionally described as a pre-segmentation aid and is not a medical/
- * cosmetic-grade segmentation guarantee.
+ * When the LiteRT faceparsing.tflite model is present, classes 2 and 3 are used
+ * as the left/right eyebrow masks. The model is run on a square crop of the full
+ * face because it was trained for whole-face parsing, not isolated brow crops.
+ * If loading or inference fails, the engine falls back to an adaptive local mask.
+ * The learned model is a starting point and still requires professional review.
  */
 internal object BrowSegmentationEngine {
-    private const val MODEL_SIZE = 256
+    private const val MODEL_SIZE = 512
+    private const val PARSING_CLASSES = 19
+    private val mean = floatArrayOf(0.485f, 0.456f, 0.406f)
+    private val std = floatArrayOf(0.229f, 0.224f, 0.225f)
     private val browSets = listOf(
         intArrayOf(70, 63, 105, 66, 107),
         intArrayOf(300, 293, 334, 296, 336)
@@ -45,16 +56,16 @@ internal object BrowSegmentationEngine {
         modelAttempted = true
         try {
             val assets = context.assets.list("")?.toSet().orEmpty()
-            if ("brow_segmentation.tflite" !in assets) return null
-            val bytes = context.assets.open("brow_segmentation.tflite").use { it.readBytes() }
+            if ("faceparsing.tflite" !in assets) return null
+            val bytes = context.assets.open("faceparsing.tflite").use { it.readBytes() }
             val mapped = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder())
             mapped.put(bytes)
             mapped.rewind()
             val candidate = Interpreter(mapped, Interpreter.Options().setNumThreads(2))
             val input = candidate.getInputTensor(0).shape()
             val output = candidate.getOutputTensor(0).shape()
-            if (!input.contentEquals(intArrayOf(1, MODEL_SIZE, MODEL_SIZE, 3)) ||
-                !output.contentEquals(intArrayOf(1, MODEL_SIZE, MODEL_SIZE, 1))) {
+            if (!input.contentEquals(intArrayOf(1, 3, MODEL_SIZE, MODEL_SIZE)) ||
+                !output.contentEquals(intArrayOf(1, PARSING_CLASSES, MODEL_SIZE, MODEL_SIZE))) {
                 candidate.close()
                 return null
             }
@@ -84,9 +95,15 @@ internal object BrowSegmentationEngine {
         val overlay = Bitmap.createBitmap(right - left, bottom - top, Bitmap.Config.ARGB_8888)
         val colors = IntArray(overlay.width * overlay.height)
         val loadedModel = loadModel(context)
+        val faceParsing = try {
+            if (loadedModel != null) predictFaceParsing(loadedModel, source, landmarks) else null
+        } catch (_: Exception) {
+            null
+        }
         var totalSelected = 0
-        var confidenceSum = 0f
+        var qualitySum = 0f
         var processedRegions = 0
+        var modelAppliedRegions = 0
 
         for (bounds in regions) {
             val x0 = bounds[0]
@@ -94,20 +111,31 @@ internal object BrowSegmentationEngine {
             val x1 = bounds[2]
             val y1 = bounds[3]
             val roi = Bitmap.createBitmap(source, x0, y0, x1 - x0, y1 - y0)
-            val prediction = try {
-                if (loadedModel != null) predictWithModel(loadedModel, roi) else null
+            val parsedMask = try {
+                faceParsing?.let { maskFromFaceParsing(it, bounds) }
             } catch (_: Exception) {
                 null
             }
-            val mask = prediction ?: adaptiveMask(roi, sensitivity)
+            val parsedPixels = parsedMask?.count { it } ?: 0
+            // A nearly empty model output can occur under makeup, harsh shadows or
+            // unusual lighting. Use the editable contrast mask instead of returning
+            // a blank eyebrow in that case.
+            val useParsedMask = parsedMask != null &&
+                parsedPixels >= max(5, (parsedMask.size * 0.003f).toInt())
+            val mask = if (useParsedMask) {
+                modelAppliedRegions++
+                parsedMask!!
+            } else {
+                adaptiveMask(roi, sensitivity)
+            }
             val count = mask.count { it }
             val ratio = count.toFloat() / mask.size.coerceAtLeast(1)
-            val localConfidence = when {
+            val localQuality = when {
                 ratio in 0.02f..0.28f -> 0.82f
                 ratio in 0.005f..0.40f -> 0.58f
                 else -> 0.25f
             }
-            confidenceSum += localConfidence
+            qualitySum += localQuality
             processedRegions++
             totalSelected += count
 
@@ -122,16 +150,21 @@ internal object BrowSegmentationEngine {
                     localIndex++
                 }
             }
-            if (roi !== source && !roi.isRecycled) roi.recycle()
+            if (!roi.isRecycled) roi.recycle()
         }
         overlay.setPixels(colors, 0, overlay.width, 0, 0, overlay.width, overlay.height)
-        val usedModel = loadedModel != null && regions.size == 2
+        val usedModel = modelAppliedRegions > 0
+        val method = when {
+            modelAppliedRegions == regions.size -> "BiSeNet 人脸解析模型"
+            modelAppliedRegions > 0 -> "BiSeNet 人脸解析模型 + 对比度补底"
+            else -> "自适应对比度预分割"
+        }
         return BrowSegmentationResult(
             overlay = overlay,
             offsetX = left,
             offsetY = top,
-            method = if (usedModel) "本地眉毛分割模型" else "自适应对比度预分割",
-            maskQualityScore = if (processedRegions == 0) 0f else confidenceSum / processedRegions,
+            method = method,
+            maskQualityScore = if (processedRegions == 0) 0f else qualitySum / processedRegions,
             selectedPixelCount = totalSelected,
             regions = regions.map { it.copyOf() }
         )
@@ -152,33 +185,112 @@ internal object BrowSegmentationEngine {
         return intArrayOf(x0, y0, x1, y1)
     }
 
-    private fun predictWithModel(interpreter: Interpreter, roi: Bitmap): BooleanArray? {
-        val scaled = Bitmap.createScaledBitmap(roi, MODEL_SIZE, MODEL_SIZE, true)
-        val input = ByteBuffer.allocateDirect(MODEL_SIZE * MODEL_SIZE * 3 * 4).order(ByteOrder.nativeOrder())
-        for (y in 0 until MODEL_SIZE) {
-            for (x in 0 until MODEL_SIZE) {
-                val pixel = scaled.getPixel(x, y)
-                input.putFloat(Color.red(pixel) / 255f)
-                input.putFloat(Color.green(pixel) / 255f)
-                input.putFloat(Color.blue(pixel) / 255f)
+    private fun predictFaceParsing(
+        interpreter: Interpreter,
+        source: Bitmap,
+        landmarks: List<PointF>
+    ): FaceParsingMap? {
+        if (source.width < 64 || source.height < 64 || landmarks.size <= 454) return null
+        val leftPoint = landmarks[234]
+        val rightPoint = landmarks[454]
+        val topPoint = landmarks.getOrNull(10) ?: return null
+        val bottomPoint = landmarks.getOrNull(152) ?: return null
+        val faceWidth = abs(rightPoint.x - leftPoint.x)
+        val faceHeight = abs(bottomPoint.y - topPoint.y)
+        if (!faceWidth.isFinite() || !faceHeight.isFinite() || faceWidth < 16f || faceHeight < 16f) {
+            return null
+        }
+
+        // Keep the original image aspect ratio inside a square face crop. The
+        // model is trained on a full face, unlike the previous small brow-ROI model.
+        val requestedSide = (max(faceWidth, faceHeight) * 1.22f).toInt()
+        val side = requestedSide.coerceIn(64, min(source.width, source.height))
+        val centerX = (leftPoint.x + rightPoint.x) / 2f
+        val centerY = (topPoint.y + bottomPoint.y) / 2f
+        val cropLeft = (centerX - side / 2f).toInt().coerceIn(0, source.width - side)
+        val cropTop = (centerY - side / 2f).toInt().coerceIn(0, source.height - side)
+        val faceCrop = Bitmap.createBitmap(source, cropLeft, cropTop, side, side)
+        val scaled = Bitmap.createScaledBitmap(faceCrop, MODEL_SIZE, MODEL_SIZE, true)
+        if (scaled !== faceCrop && !faceCrop.isRecycled) faceCrop.recycle()
+
+        try {
+            val pixels = IntArray(MODEL_SIZE * MODEL_SIZE)
+            scaled.getPixels(pixels, 0, MODEL_SIZE, 0, 0, MODEL_SIZE, MODEL_SIZE)
+            val input = ByteBuffer.allocateDirect(
+                MODEL_SIZE * MODEL_SIZE * 3 * 4
+            ).order(ByteOrder.nativeOrder())
+
+            // The released model expects NCHW RGB channels normalized with
+            // ImageNet mean/std, rather than interleaved RGB values in [0,1].
+            for (channel in 0..2) {
+                for (pixel in pixels) {
+                    val channelValue = when (channel) {
+                        0 -> Color.red(pixel) / 255f
+                        1 -> Color.green(pixel) / 255f
+                        else -> Color.blue(pixel) / 255f
+                    }
+                    input.putFloat((channelValue - mean[channel]) / std[channel])
+                }
+            }
+            input.rewind()
+
+            val output = ByteBuffer.allocateDirect(
+                PARSING_CLASSES * MODEL_SIZE * MODEL_SIZE * 4
+            ).order(ByteOrder.nativeOrder())
+            interpreter.run(input, output)
+            output.rewind()
+            val logits = output.asFloatBuffer()
+            val planeSize = MODEL_SIZE * MODEL_SIZE
+            val labels = ByteArray(planeSize)
+            for (pixel in 0 until planeSize) {
+                var bestClass = 0
+                var bestValue = logits.get(pixel)
+                for (classIndex in 1 until PARSING_CLASSES) {
+                    val value = logits.get(classIndex * planeSize + pixel)
+                    if (value > bestValue) {
+                        bestValue = value
+                        bestClass = classIndex
+                    }
+                }
+                labels[pixel] = bestClass.toByte()
+            }
+            return FaceParsingMap(labels, cropLeft, cropTop, side)
+        } finally {
+            if (!scaled.isRecycled) scaled.recycle()
+        }
+    }
+
+    private fun maskFromFaceParsing(
+        parsed: FaceParsingMap,
+        bounds: IntArray
+    ): BooleanArray {
+        val x0 = bounds[0]
+        val y0 = bounds[1]
+        val width = bounds[2] - x0
+        val height = bounds[3] - y0
+        val result = BooleanArray(width * height)
+        var index = 0
+        for (y in 0 until height) {
+            val imageY = y0 + y
+            val modelY = (((imageY + 0.5f - parsed.cropTop) * MODEL_SIZE) / parsed.cropSize)
+                .toInt()
+            if (modelY !in 0 until MODEL_SIZE) {
+                index += width
+                continue
+            }
+            for (x in 0 until width) {
+                val imageX = x0 + x
+                val modelX = (((imageX + 0.5f - parsed.cropLeft) * MODEL_SIZE) / parsed.cropSize)
+                    .toInt()
+                if (modelX in 0 until MODEL_SIZE) {
+                    val label = parsed.labels[modelY * MODEL_SIZE + modelX].toInt() and 0xFF
+                    // 2 = left eyebrow, 3 = right eyebrow in the model card.
+                    result[index] = label == 2 || label == 3
+                }
+                index++
             }
         }
-        if (scaled !== roi && !scaled.isRecycled) scaled.recycle()
-        input.rewind()
-        val output = ByteBuffer.allocateDirect(MODEL_SIZE * MODEL_SIZE * 4).order(ByteOrder.nativeOrder())
-        interpreter.run(input, output)
-        output.rewind()
-        val probabilities = FloatArray(MODEL_SIZE * MODEL_SIZE) { output.float }
-        val mask = BooleanArray(roi.width * roi.height)
-        var k = 0
-        for (y in 0 until roi.height) {
-            val sy = ((y + 0.5f) * MODEL_SIZE / roi.height).toInt().coerceIn(0, MODEL_SIZE - 1)
-            for (x in 0 until roi.width) {
-                val sx = ((x + 0.5f) * MODEL_SIZE / roi.width).toInt().coerceIn(0, MODEL_SIZE - 1)
-                mask[k++] = probabilities[sy * MODEL_SIZE + sx] >= 0.5f
-            }
-        }
-        return mask
+        return result
     }
 
     private fun adaptiveMask(roi: Bitmap, sensitivity: Float): BooleanArray {
