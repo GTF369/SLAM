@@ -1597,6 +1597,12 @@ class MainActivity : AppCompatActivity() {
             textSize = 12f
             setPadding(dp(4), dp(6), dp(4), dp(6))
         }
+        val printScaleInput = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            hint = "上次打印的校准框边长（mm），首次留空"
+            setText(getSharedPreferences("brow_print_calibration", Context.MODE_PRIVATE)
+                .getString("measured_square_mm", ""))
+        }
         val applyCorrection = CheckBox(this).apply {
             text = "应用此顾客已实测的区域长度修正（实验性）"
             isChecked = measuredFactors.size == curvatureRegionNames.size
@@ -1620,13 +1626,24 @@ class MainActivity : AppCompatActivity() {
                 textSize = 12f
             })
             addView(input)
+            addView(TextView(this@MainActivity).apply {
+                text = "打印比例校准（可选）"
+                textSize = 12f
+                setPadding(dp(4), dp(4), dp(4), 0)
+            })
+            addView(printScaleInput)
+            addView(TextView(this@MainActivity).apply {
+                text = "第一次先留空打印，测量纸上 20 mm 方框的实际边长。下一次把实测值填入，例如 19.5 mm，应用会按 20 / 19.5 计算修正系数。每次必须使用同一台打印机、纸张和打印设置。"
+                textSize = 11f
+                setPadding(dp(4), dp(2), dp(4), dp(4))
+            })
             addView(calibrationInfo)
             addView(applyCorrection)
             addView(note)
         }
         AlertDialog.Builder(this)
             .setTitle("生成 1:1 拓描模板")
-            .setMessage("打印时选择 A4 与 100% / 实际尺寸，关闭“适合页面”等自动缩放。打印后必须实测 20 mm 校准框。")
+            .setMessage("打印时选择 A4 与 100% / 实际尺寸，关闭“适合页面”等自动缩放。首次把打印比例校准留空，打印后测量 20 mm 校准框，再把实际边长填入后重打并复测。")
             .setView(form)
             .setNegativeButton("取消", null)
             .setPositiveButton("生成打印模板") { _, _ ->
@@ -1635,6 +1652,19 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, "请输入合理的实测瞳距（35–90 毫米）", Toast.LENGTH_LONG).show()
                     return@setPositiveButton
                 }
+                val measuredSquareText = printScaleInput.text.toString().trim()
+                val measuredSquareMm = if (measuredSquareText.isEmpty()) null else measuredSquareText.toFloatOrNull()
+                if (measuredSquareText.isNotEmpty() &&
+                    (measuredSquareMm == null || measuredSquareMm !in 16f..24f)) {
+                    Toast.makeText(this, "校准框实测边长应为 16–24 毫米，首次打印可留空", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                val printScaleCorrection = measuredSquareMm?.let { 20f / it } ?: 1f
+                if (measuredSquareMm != null) {
+                    getSharedPreferences("brow_print_calibration", Context.MODE_PRIVATE).edit()
+                        .putString("measured_square_mm", measuredSquareMm.toString()).apply()
+                }
+
                 val pixelDistance = BrowRenderer.pupilDistance(points)
                 if (pixelDistance < 5f) {
                     Toast.makeText(this, "未能定位瞳孔，请重新拍摄正面照片", Toast.LENGTH_LONG).show()
@@ -1659,12 +1689,17 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, "眉形模板生成失败，请重新拍摄", Toast.LENGTH_LONG).show()
                     return@setPositiveButton
                 }
-                printTemplate(template, pixelDistance / measuredMm, useCurvature)
+                printTemplate(template, pixelDistance / measuredMm, useCurvature, printScaleCorrection)
             }
             .show()
     }
 
-    private fun printTemplate(template: Bitmap, pixelsPerMm: Float, curvatureCorrected: Boolean = false) {
+    private fun printTemplate(
+        template: Bitmap,
+        pixelsPerMm: Float,
+        curvatureCorrected: Boolean = false,
+        printScaleCorrection: Float = 1f
+    ) {
         val printManager = getSystemService(Context.PRINT_SERVICE) as PrintManager
         val jobName = "眉形拓描模板"
         val defaultAttributes = PrintAttributes.Builder()
@@ -1711,12 +1746,15 @@ class MainActivity : AppCompatActivity() {
                     val page = document.startPage(1)
                     val canvas = page.canvas
                     val content = document.pageContentRect
-                    val pointsPerPixel = 72f / (25.4f * pixelsPerMm)
+                    val pointsPerPixel = 72f / (25.4f * pixelsPerMm) * printScaleCorrection
                     val widthPts = template.width * pointsPerPixel
                     val heightPts = template.height * pointsPerPixel
-                    val calibrationPts = 20f * 72f / 25.4f
+                    val calibrationPts = 20f * 72f / 25.4f * printScaleCorrection
                     val gapPts = 12f
-                    val calibrationLabelHeightPts = if (curvatureCorrected) 22f else 12f
+                    val hasScaleCorrection = kotlin.math.abs(printScaleCorrection - 1f) > 0.001f
+                    val calibrationLabelHeightPts = 12f +
+                        (if (hasScaleCorrection) 10f else 0f) +
+                        (if (curvatureCorrected) 10f else 0f)
                     val totalHeightPts = heightPts + gapPts + calibrationPts + calibrationLabelHeightPts
                     if (widthPts > content.width() || totalHeightPts > content.height()) {
                         document.finishPage(page)
@@ -1742,11 +1780,22 @@ class MainActivity : AppCompatActivity() {
                         style = Paint.Style.FILL
                     }
                     canvas.drawText("20 mm calibration", boxLeft + calibrationPts / 2f, boxTop + calibrationPts + 9f, labelPaint)
+                    var annotationLine = 1
+                    if (hasScaleCorrection) {
+                        val correctionLabel = "打印比例修正 x${(printScaleCorrection * 1000f).roundToInt() / 1000f}"
+                        canvas.drawText(
+                            correctionLabel,
+                            content.exactCenterX(),
+                            boxTop + calibrationPts + 9f + 11f * annotationLine,
+                            labelPaint
+                        )
+                        annotationLine++
+                    }
                     if (curvatureCorrected) {
                         canvas.drawText(
                             "区域长度修正已启用（实验性）",
                             content.exactCenterX(),
-                            boxTop + calibrationPts + 20f,
+                            boxTop + calibrationPts + 9f + 11f * annotationLine,
                             labelPaint
                         )
                     }
