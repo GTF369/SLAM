@@ -813,7 +813,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshRecommendations(points: List<PointF>) {
         recommendationRow.removeAllViews()
-        val ranked = BrowRecommendationEngine.rank(this, points)
+        val ranked = BrowRecommendationEngine.rank(this, points, segmentationResult, segmentationReviewed, useNativeShape)
         recommendationLabel.text = BrowRecommendationEngine.sourceLabel(this)
         ranked.forEach { recommendation ->
             val button = Button(this).apply {
@@ -2220,8 +2220,14 @@ private object BrowRecommendationEngine {
             "当前使用几何规则参考分，并非 AI 概率。偏好模型只有经过独立校准、外部顾客验证和人工审核后才会启用。"
         }
 
-    fun rank(context: Context, points: List<PointF>): List<BrowRecommendation> {
-        val features = measurements(points)
+    fun rank(
+        context: Context,
+        points: List<PointF>,
+        segmentation: BrowSegmentationResult?,
+        maskReviewed: Boolean,
+        nativeShapeMode: Boolean
+    ): List<BrowRecommendation> {
+        val features = measurements(points, segmentation, maskReviewed, nativeShapeMode)
         val templates = listOf(
             BrowRecommendation("自然款", 82, BrowParams(1.0f, 1.0f, 0.92f, 0), "自然款：较保守的参数基线，仍需纹绣师确认"),
             BrowRecommendation("柔和款", 78, BrowParams(0.82f, 0.94f, 0.72f, 1), "柔和款：较低粗细与弧度的参数预设"),
@@ -2254,7 +2260,11 @@ private object BrowRecommendationEngine {
                                 candidateParams.length,
                                 candidateParams.arch,
                                 if (candidateParams.style == 1) 1f else 0f,
-                                if (candidateParams.style == 2) 1f else 0f
+                                if (candidateParams.style == 2) 1f else 0f,
+                                features.nativeBrowAreaFraction,
+                                features.nativeBrowSideImbalance,
+                                features.nativeBrowMaskAvailable,
+                                features.nativeShapeMode
                             )
                             val preference = predict(model, x)
                             candidates.add(
@@ -2288,7 +2298,7 @@ private object BrowRecommendationEngine {
             val root = org.json.JSONObject(json)
             // Only a model explicitly human-reviewed after independent calibration and
             // external validation may provide percentages in the live app.
-            if (root.optInt("model_version", -1) != 2) return null
+            if (root.optInt("model_version", -1) != 3) return null
             if (!root.optBoolean("release_approved", false)) return null
             if (root.optString("calibration_status") != "platt_scaling") return null
             val external = root.optJSONObject("external_validation") ?: return null
@@ -2316,7 +2326,11 @@ private object BrowRecommendationEngine {
                 "length",
                 "arch",
                 "style_soft",
-                "style_defined"
+                "style_defined",
+                "native_brow_area_fraction",
+                "native_brow_side_imbalance",
+                "native_brow_mask_available",
+                "native_shape_mode"
             )
             val featureOrder = root.optJSONArray("feature_order") ?: return null
             if (featureOrder.length() != expectedFeatures.size) return null
@@ -2326,11 +2340,11 @@ private object BrowRecommendationEngine {
             val meansJson = root.getJSONArray("means")
             val scalesJson = root.getJSONArray("scales")
             val coefficientsJson = root.getJSONArray("coefficients")
-            if (meansJson.length() != 11 || scalesJson.length() != 11 || coefficientsJson.length() != 11) return null
+            if (meansJson.length() != 15 || scalesJson.length() != 15 || coefficientsJson.length() != 15) return null
             trainedModel = TrainedModel(
-                FloatArray(11) { meansJson.getDouble(it).toFloat() },
-                FloatArray(11) { scalesJson.getDouble(it).toFloat().let { scale -> if (abs(scale) < 1e-8f) 1f else scale } },
-                FloatArray(11) { coefficientsJson.getDouble(it).toFloat() },
+                FloatArray(15) { meansJson.getDouble(it).toFloat() },
+                FloatArray(15) { scalesJson.getDouble(it).toFloat().let { scale -> if (abs(scale) < 1e-8f) 1f else scale } },
+                FloatArray(15) { coefficientsJson.getDouble(it).toFloat() },
                 root.getDouble("intercept").toFloat(),
                 root.getDouble("calibration_intercept").toFloat(),
                 root.getDouble("calibration_slope").toFloat()
