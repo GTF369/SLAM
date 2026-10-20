@@ -264,7 +264,14 @@ class MainActivity : AppCompatActivity() {
                 browView.setSegmentationEditMode(true, includePixels = false)
                 toggleNativeSegmentation()
             },
-            "完成修正" to { browView.setSegmentationEditMode(false) }
+            "完成修正" to {
+                browView.setSegmentationEditMode(false)
+                segmentationReviewed = segmentationResult != null
+                if (segmentationReviewed) {
+                    segmentationLabel.text = "已由纹绣师确认识别层。掩膜特征可用于本次设计反馈，仍需检查实际眉形。"
+                    refreshRecommendations(browView.facePoints())
+                }
+            }
         ))
         addButtonRow(designControls, listOf(
             "以原生眉形作底稿" to { toggleNativeShapeDesign() },
@@ -847,6 +854,7 @@ class MainActivity : AppCompatActivity() {
         segmentationResult?.overlay?.recycle()
         segmentationResult = null
         showNativeSegmentation = false
+        segmentationReviewed = false
         useNativeShape = false
         browView.setNativeShapeMode(false)
         if (::segmentationLabel.isInitialized) segmentationLabel.text = "原生眉区识别：尚未运行"
@@ -887,6 +895,7 @@ class MainActivity : AppCompatActivity() {
         segmentationResult?.overlay?.recycle()
         segmentationResult = null
         showNativeSegmentation = false
+        segmentationReviewed = false
         useNativeShape = false
         browView.setNativeShapeMode(false)
         if (::segmentationLabel.isInitialized) segmentationLabel.text = "原生眉区识别：尚未运行"
@@ -895,6 +904,7 @@ class MainActivity : AppCompatActivity() {
         capturedPhoto?.recycle()
         capturedPhoto = null
         capturedLandmarkDepths = emptyList()
+        segmentationReviewed = false
         browView.setPhoto(null)
         browView.setParams(params)
         previewView.visibility = View.VISIBLE
@@ -1014,6 +1024,7 @@ class MainActivity : AppCompatActivity() {
         }
         showNativeSegmentation = false
         useNativeShape = plan.useNativeShape && segmentationResult != null
+        segmentationReviewed = useNativeShape
         browView.setSegmentationResult(segmentationResult, false)
         browView.setNativeShapeMode(useNativeShape)
         params = plan.params.copy()
@@ -1391,6 +1402,7 @@ class MainActivity : AppCompatActivity() {
             useNativeShape = false
             browView.setNativeShapeMode(false)
             status.text = "已切换到参数化眉形底稿"
+            refreshRecommendations(browView.facePoints())
             return
         }
         val result = segmentationResult
@@ -1406,13 +1418,17 @@ class MainActivity : AppCompatActivity() {
             browView.setSegmentationResult(result, true)
             return
         }
+        // Choosing this action is an explicit acceptance of the visible mask.
+        // From this point, mask-derived features may be included in anonymous feedback.
+        segmentationReviewed = true
         useNativeShape = true
         showNativeSegmentation = false
         browView.setSegmentationEditMode(false)
         browView.setSegmentationResult(result, false)
         browView.setNativeShapeMode(true)
-        segmentationLabel.text = "正在使用原生眉区轮廓生成底稿。请调整后人工确认边界。"
+        segmentationLabel.text = "已确认原生眉区轮廓。仍请在预览和打印前复核边界。"
         status.text = "已切换到原生眉形轮廓底稿，可微调粗细、长度和弧度"
+        refreshRecommendations(browView.facePoints())
     }
 
     private fun runSegmentation() {
@@ -1426,9 +1442,11 @@ class MainActivity : AppCompatActivity() {
             imageExecutor = Executors.newSingleThreadExecutor()
         }
         val generation = ++segmentationGeneration
-        // Preserve native-shape mode only if the artist had already explicitly enabled it.
-        // A heuristic pixel-density score is not evidence that an unvalidated parser mask is correct.
-        val preserveArtistApprovedNativeShape = useNativeShape
+        // A newly generated mask has not yet been reviewed, even when the previous
+        // mask was accepted. Do not use its derived features until the artist confirms it.
+        segmentationReviewed = false
+        useNativeShape = false
+        browView.setNativeShapeMode(false)
         segmentationLabel.text = "正在识别原生眉区…"
         imageExecutor?.execute {
             val result = try {
@@ -1453,14 +1471,15 @@ class MainActivity : AppCompatActivity() {
                     showNativeSegmentation = true
                     browView.setSegmentationResult(result, true)
                     val contourUsable = browView.hasUsableNativeContour()
-                    useNativeShape = preserveArtistApprovedNativeShape && contourUsable
-                    browView.setNativeShapeMode(useNativeShape)
+                    useNativeShape = false
+                    browView.setNativeShapeMode(false)
                     segmentationLabel.text = "识别方式：${result.method} · 掩膜质量提示 ${(result.maskQualityScore * 100).toInt()}%（按像素占比估算，非模型置信概率）· 识别像素 ${result.selectedPixelCount} · 请人工检查边界"
                     status.text = if (contourUsable) {
-                        "已识别原生眉区，请检查绿色覆盖层。确认轮廓正确后，再点“以原生眉形作底稿”使用。"
+                        "已识别原生眉区，请检查绿色覆盖层。点击“完成修正”确认掩膜，或直接点“以原生眉形作底稿”接受并使用。"
                     } else {
                         "眉区轮廓无法可靠提取，当前保留参数化初稿。可调整灵敏度或手工补画/擦除后重新检查。"
                     }
+                    refreshRecommendations(points)
                 }
             }
         }
