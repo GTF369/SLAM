@@ -32,7 +32,7 @@ class CurvatureAnalysisTests(unittest.TestCase):
         self.assertEqual(len(factor_cases), 2)
         self.assertAlmostEqual(sum(factor_cases) / 2, 1.10)
         self.assertEqual(len(radius_cases), 2)
-        self.assertAlmostEqual(sum(radius_cases) / 2, 23.25)
+        self.assertAlmostEqual(sum(radius_cases) / 2, 25.5)
 
 
 if __name__ == "__main__":
