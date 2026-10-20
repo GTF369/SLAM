@@ -1185,9 +1185,10 @@ class MainActivity : AppCompatActivity() {
             )
         }
         val caseIdField = EditText(this).apply {
-            hint = "匿名顾客编号（同一顾客复测请沿用）"
+            hint = "本次匿名顾客代码"
             setSingleLine(true)
-            setText(currentCaseId.take(8))
+            setText(currentCaseId)
+            isEnabled = false
         }
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
