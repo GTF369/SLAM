@@ -1835,20 +1835,59 @@ private object BrowRenderer {
     )
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
-    fun drawBrows(canvas: Canvas, points: List<PointF>, params: BrowParams, outlineOnly: Boolean = false) {
+    fun drawBrows(
+        canvas: Canvas,
+        points: List<PointF>,
+        params: BrowParams,
+        outlineOnly: Boolean = false,
+        curvatureFactors: Map<String, Float> = emptyMap()
+    ) {
         if (points.size < 455) return
-        browSets.forEach { ids -> drawOne(canvas, points, ids, params, outlineOnly) }
+        val noseX = points.getOrNull(1)?.x ?: points.map { it.x }.average().toFloat()
+        browSets.forEach { ids ->
+            val sideCenter = ids.mapNotNull { index -> points.getOrNull(index) }.map { it.x }.average().toFloat()
+            // The displayed selfie image is mirrored. Convert its screen side to anatomical side.
+            val anatomicalRight = sideCenter < noseX
+            drawOne(canvas, points, ids, params, outlineOnly, curvatureFactors, anatomicalRight)
+        }
     }
 
-    private fun drawOne(canvas: Canvas, points: List<PointF>, ids: IntArray, params: BrowParams, outlineOnly: Boolean) {
+    private fun drawOne(
+        canvas: Canvas,
+        points: List<PointF>,
+        ids: IntArray,
+        params: BrowParams,
+        outlineOnly: Boolean,
+        curvatureFactors: Map<String, Float>,
+        anatomicalRight: Boolean
+    ) {
         // Use all detected brow-region landmarks instead of forcing a generic arch between two endpoints.
         val ordered = ids.map { index -> points.getOrNull(index) }
             .filterNotNull()
             .filter { it.x.isFinite() && it.y.isFinite() }
             .sortedBy { it.x }
         if (ordered.size < 4) return
-        val anchorStart = ordered.first()
-        val anchorEnd = ordered.last()
+        val segmentRegions = if (anatomicalRight) {
+            listOf("右眉尾", "右眉峰", "右眉身", "右眉头")
+        } else {
+            listOf("左眉头", "左眉身", "左眉峰", "左眉尾")
+        }
+        val workingPoints = if (curvatureFactors.isEmpty()) {
+            ordered
+        } else {
+            val cumulative = mutableListOf(ordered.first().x)
+            for (i in 0 until ordered.lastIndex) {
+                val rawFactor = curvatureFactors[segmentRegions[i]] ?: 1f
+                val factor = rawFactor.coerceIn(1f, 1.4f)
+                val dx = ordered[i + 1].x - ordered[i].x
+                cumulative.add(cumulative.last() + dx * factor)
+            }
+            val originalCenter = (ordered.first().x + ordered.last().x) / 2f
+            val correctedCenter = (cumulative.first() + cumulative.last()) / 2f
+            ordered.mapIndexed { index, point -> PointF(cumulative[index] + originalCenter - correctedCenter, point.y) }
+        }
+        val anchorStart = workingPoints.first()
+        val anchorEnd = workingPoints.last()
         val naturalSpan = hypot(
             (anchorEnd.x - anchorStart.x).toDouble(),
             (anchorEnd.y - anchorStart.y).toDouble()
@@ -1859,7 +1898,7 @@ private object BrowRenderer {
         val displaySpan = naturalSpan * params.length
         val centerline = (0..48).map { index ->
             val t = index / 48f
-            val base = sampleCatmullRom(ordered, t)
+            val base = sampleCatmullRom(workingPoints, t)
             val archDelta = naturalSpan * 0.075f * (params.arch - 1f) * 4f * t * (1f - t)
             PointF(centerX + (base.x - centerX) * params.length, base.y - archDelta)
         }
@@ -1973,12 +2012,19 @@ private object BrowRenderer {
         return output
     }
 
-    fun createTemplate(points: List<PointF>, params: BrowParams, width: Int, height: Int): Bitmap? {
+    fun createTemplate(
+        points: List<PointF>,
+        params: BrowParams,
+        width: Int,
+        height: Int,
+        curvatureFactors: Map<String, Float> = emptyMap()
+    ): Bitmap? {
         if (points.size < 455 || width <= 0 || height <= 0) return null
         val browPoints = browSets.flatMap { ids -> ids.map { index -> points.getOrNull(index) }.filterNotNull() }
         if (browPoints.isEmpty()) return null
         val faceWidth = if (points.size > 454) abs(points[454].x - points[234].x) else width * 0.35f
-        val marginX = max(8f, faceWidth * 0.06f)
+        val maxCorrection = curvatureFactors.values.maxOrNull()?.coerceIn(1f, 1.4f) ?: 1f
+        val marginX = max(8f, faceWidth * (0.06f + (maxCorrection - 1f) * 0.9f))
         val marginY = max(8f, faceWidth * 0.11f)
         val left = (browPoints.minOf { it.x } - marginX).toInt().coerceIn(0, width - 1)
         val top = (browPoints.minOf { it.y } - marginY).toInt().coerceIn(0, height - 1)
@@ -1988,7 +2034,7 @@ private object BrowRenderer {
         // Only allocate the small eyebrow region, not a full-resolution transparent
         // bitmap the size of the whole face photo. This reduces peak memory use.
         val template = Bitmap.createBitmap(right - left, bottom - top, Bitmap.Config.ARGB_8888)
-        drawBrows(Canvas(template), shiftedPoints, params, outlineOnly = true)
+        drawBrows(Canvas(template), shiftedPoints, params, outlineOnly = true, curvatureFactors = curvatureFactors)
         // The customer-facing preview is mirrored like a selfie. Flip only the
         // physical stencil back so left/right anatomy maps correctly on the customer.
         val unmirrored = Bitmap.createBitmap(
