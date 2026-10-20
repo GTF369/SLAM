@@ -125,13 +125,17 @@ def build_model():
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, required=True)
-    parser.add_argument("--output", type=Path, default=Path("app/src/main/assets/brow_segmentation.tflite"))
+    parser.add_argument("--output", type=Path, default=Path("ml/artifacts/brow_segmentation_candidate.tflite"))
     parser.add_argument("--metrics", type=Path, default=Path("ml/brow_segmentation_metrics.json"))
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--min-cases", type=int, default=50,
                         help="Minimum distinct annotated cases for an exploratory model. Does not imply production readiness.")
+    parser.add_argument("--promote-to-app", action="store_true",
+                        help="Copy candidate into app assets only when the grouped holdout Dice meets the threshold.")
+    parser.add_argument("--min-validation-dice", type=float, default=0.70,
+                        help="Minimum grouped holdout Dice required for --promote-to-app.")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -208,7 +212,21 @@ def main() -> None:
     args.metrics.parent.mkdir(parents=True, exist_ok=True)
     args.metrics.write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(metrics, indent=2))
-    print(f"TFLite model written to {args.output}")
+    print(f"Candidate TFLite model written to {args.output}")
+    if args.promote_to_app:
+        if metrics["validation_dice"] < args.min_validation_dice:
+            raise SystemExit(
+                f"Model not promoted: grouped validation Dice={metrics['validation_dice']:.3f} "
+                f"is below --min-validation-dice={args.min_validation_dice:.3f}. "
+                "Review annotations and collect more consented cases."
+            )
+        app_path = Path("app/src/main/assets/brow_segmentation.tflite")
+        app_path.parent.mkdir(parents=True, exist_ok=True)
+        app_path.write_bytes(model_bytes)
+        print(f"Candidate copied into app assets: {app_path}")
+        print("This is not a production release. Independent client and target-device validation remains required.")
+    else:
+        print("Candidate was not added to the app. Review the metric JSON and validation examples first.")
     print("Do not treat the grouped holdout score as proof of clinical, demographic, or commercial generalization.")
 
 
