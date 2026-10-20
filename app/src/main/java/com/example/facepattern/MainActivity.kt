@@ -129,6 +129,8 @@ class MainActivity : AppCompatActivity() {
     private var frameHeight = 480
     private var designMode = false
     private var capturedPhoto: Bitmap? = null
+    // MediaPipe z is a relative depth estimate, scaled to image width rather than millimetres.
+    private var capturedLandmarkDepths: List<Float> = emptyList()
     private var params = BrowParams()
     private val history = mutableListOf<BrowParams>()
     private val savedPlans = mutableListOf<BrowPlan>()
@@ -612,6 +614,7 @@ class MainActivity : AppCompatActivity() {
                     imageExecutor?.execute {
                         var bitmap: Bitmap? = null
                         var points: List<PointF> = emptyList()
+                        var depths: List<Float> = emptyList()
                         var failure: String? = null
                         var detector: FaceLandmarker? = null
                         var mpImage: com.google.mediapipe.framework.image.MPImage? = null
@@ -630,9 +633,11 @@ class MainActivity : AppCompatActivity() {
                                 )
                                 mpImage = BitmapImageBuilder(bitmap).build()
                                 val result = detector.detect(mpImage)
-                                points = result.faceLandmarks().firstOrNull()?.map {
+                                val detected = result.faceLandmarks().firstOrNull()
+                                points = detected?.map {
                                     PointF(it.x() * bitmap!!.width, it.y() * bitmap!!.height)
                                 } ?: emptyList()
+                                depths = detected?.map { it.z() } ?: emptyList()
                                 if (points.size < 400) failure = "照片中的人脸关键点不足，请正视镜头并保持眉眼无遮挡"
                             }
                         } catch (e: Exception) {
@@ -652,7 +657,7 @@ class MainActivity : AppCompatActivity() {
                             } else {
                                 val warning = photoQualityWarning(photo, points)
                                 if (warning == null) {
-                                    enterDesignMode(photo, points)
+                                    enterDesignMode(photo, points, depths)
                                 } else {
                                     AlertDialog.Builder(this@MainActivity)
                                         .setTitle("拍摄质量提醒")
@@ -661,7 +666,7 @@ class MainActivity : AppCompatActivity() {
                                             photo.recycle()
                                             retakePhoto()
                                         }
-                                        .setPositiveButton("仍然使用") { _, _ -> enterDesignMode(photo, points) }
+                                        .setPositiveButton("仍然使用") { _, _ -> enterDesignMode(photo, points, depths) }
                                         .show()
                                 }
                             }
@@ -812,7 +817,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun enterDesignMode(photo: Bitmap, photoPoints: List<PointF>) {
+    private fun enterDesignMode(
+        photo: Bitmap,
+        photoPoints: List<PointF>,
+        normalizedDepths: List<Float> = emptyList()
+    ) {
         stopTransition()
         segmentationGeneration++
         savedPlans.forEach { it.segmentationSnapshot?.overlay?.recycle() }
@@ -829,6 +838,8 @@ class MainActivity : AppCompatActivity() {
         if (::plansRow.isInitialized) refreshPlanButtons()
         capturedPhoto?.recycle()
         capturedPhoto = photo
+        capturedLandmarkDepths = if (normalizedDepths.size == photoPoints.size &&
+            normalizedDepths.all { it.isFinite() }) normalizedDepths.map { it * photo.width } else emptyList()
         designMode = true
         browView.setPhoto(photo)
         browView.setFacePoints(photoPoints)
@@ -862,6 +873,7 @@ class MainActivity : AppCompatActivity() {
         designMode = false
         capturedPhoto?.recycle()
         capturedPhoto = null
+        capturedLandmarkDepths = emptyList()
         browView.setPhoto(null)
         browView.setParams(params)
         previewView.visibility = View.VISIBLE
@@ -1580,6 +1592,54 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Uses MediaPipe's relative z estimate only as a rough local arc-length proxy.
+     * It is NOT metric skin-surface length and must remain opt-in until compared with
+     * physical measurements. Values are clamped to limit the influence of noisy z.
+     */
+    private fun estimateDepthBasedCurvatureFactors(
+        points: List<PointF>,
+        depths: List<Float>
+    ): Map<String, Float> {
+        if (points.size < 455 || depths.size != points.size ||
+            depths.any { !it.isFinite() }) return emptyMap()
+        val noseX = points.getOrNull(1)?.x ?: return emptyMap()
+        val browLandmarkSets = listOf(
+            intArrayOf(70, 63, 105, 66, 107),
+            intArrayOf(300, 293, 334, 296, 336)
+        )
+        val factors = linkedMapOf<String, Float>()
+        for (ids in browLandmarkSets) {
+            val usable = ids.filter { it in points.indices && it in depths.indices }
+                .filter { points[it].x.isFinite() && points[it].y.isFinite() }
+                .sortedBy { points[it].x }
+            if (usable.size != ids.size) continue
+            val sideCenter = usable.map { points[it].x }.average().toFloat()
+            val anatomicalRight = sideCenter < noseX
+            val names = if (anatomicalRight) {
+                listOf("右眉尾", "右眉峰", "右眉身", "右眉头")
+            } else {
+                listOf("左眉头", "左眉身", "左眉峰", "左眉尾")
+            }
+            for (i in 0 until usable.lastIndex) {
+                val a = usable[i]
+                val b = usable[i + 1]
+                val dx = points[b].x - points[a].x
+                val dy = points[b].y - points[a].y
+                val dz = depths[b] - depths[a]
+                val planar = hypot(dx.toDouble(), dy.toDouble()).toFloat()
+                val spatial = hypot(planar.toDouble(), dz.toDouble()).toFloat()
+                val factor = if (planar > 0.5f && spatial.isFinite()) {
+                    (spatial / planar).coerceIn(1f, 1.4f)
+                } else {
+                    1f
+                }
+                factors[names[i]] = factor
+            }
+        }
+        return factors
+    }
+
     private fun askPrintCalibration() {
         val points = browView.facePoints()
         if (points.size < 478 || capturedPhoto == null) {
@@ -1614,13 +1674,19 @@ class MainActivity : AppCompatActivity() {
             isChecked = false
         }
         val applyCorrection = CheckBox(this).apply {
-            text = "应用此顾客已实测的区域长度修正（实验性）"
-            // This feature is not independently validated, so never enable it by default.
+            text = "应用此顾客已实测的区域长度修正（优先使用实测值）"
+            // Physical measurements remain opt-in and have priority over estimated depth.
             isChecked = false
             isEnabled = measuredFactors.size == curvatureRegionNames.size
         }
+        val depthPreviewFactors = estimateDepthBasedCurvatureFactors(points, capturedLandmarkDepths)
+        val applyDepthCorrection = CheckBox(this).apply {
+            text = "尝试 MediaPipe 深度估计的区域长度修正（实验性）"
+            isChecked = false
+            isEnabled = depthPreviewFactors.size == curvatureRegionNames.size
+        }
         val note = TextView(this).apply {
-            text = "单张照片无法恢复完整三维眉弓。只有当前顾客的 8 个区域全部有实测值时，才可勾选实验性长度修正。修正不会替代打印后的 20 mm 校准。"
+            text = "单张正面照片无法恢复真实三维眉弓。MediaPipe 的 z 值是相对深度估计，不是毫米级皮肤表面测量。优先使用顾客实测值；深度估计修正默认关闭，仅用于试验比较。所有方案都必须先通过打印后的 20 mm 校准。"
             textSize = 11f
             setPadding(dp(4), dp(2), dp(4), dp(2))
         }
@@ -1652,6 +1718,7 @@ class MainActivity : AppCompatActivity() {
             addView(resetPrintScale)
             addView(calibrationInfo)
             addView(applyCorrection)
+            addView(applyDepthCorrection)
             addView(note)
         }
         AlertDialog.Builder(this)
@@ -1689,12 +1756,27 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, "未能定位瞳孔，请重新拍摄正面照片", Toast.LENGTH_LONG).show()
                     return@setPositiveButton
                 }
-                val useCurvature = applyCorrection.isChecked
-                if (useCurvature && measuredFactors.size != curvatureRegionNames.size) {
-                    Toast.makeText(this, "8 个区域的实测值不完整，不能应用区域修正", Toast.LENGTH_LONG).show()
+                val useMeasuredCurvature = applyCorrection.isChecked
+                val useDepthCurvature = applyDepthCorrection.isChecked && !useMeasuredCurvature
+                if (useMeasuredCurvature && measuredFactors.size != curvatureRegionNames.size) {
+                    Toast.makeText(this, "8 个区域的实测值不完整，不能应用实测区域修正", Toast.LENGTH_LONG).show()
                     return@setPositiveButton
                 }
-                val factorsToApply = if (useCurvature) measuredFactors else emptyMap()
+                val depthFactors = if (useDepthCurvature) {
+                    estimateDepthBasedCurvatureFactors(points, capturedLandmarkDepths)
+                } else {
+                    emptyMap()
+                }
+                if (useDepthCurvature && depthFactors.size != curvatureRegionNames.size) {
+                    Toast.makeText(this, "MediaPipe 深度关键点不完整，不能应用估计修正", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                val useCurvature = useMeasuredCurvature || useDepthCurvature
+                val factorsToApply = when {
+                    useMeasuredCurvature -> measuredFactors
+                    useDepthCurvature -> depthFactors
+                    else -> emptyMap()
+                }
                 val template = BrowRenderer.createTemplate(
                     points,
                     params,
