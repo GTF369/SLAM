@@ -804,7 +804,11 @@ class MainActivity : AppCompatActivity() {
         recommendationLabel.text = BrowRecommendationEngine.sourceLabel(this)
         ranked.forEach { recommendation ->
             val button = Button(this).apply {
-                text = if (BrowRecommendationEngine.hasApprovedModel(this@MainActivity)) {\n                    "${recommendation.name}\\n偏好估计 ${recommendation.score}%"\n                } else {\n                    "${recommendation.name}\\n规则参考分 ${recommendation.score}"\n                }
+                text = if (BrowRecommendationEngine.hasApprovedModel(this@MainActivity)) {
+                    "${recommendation.name}\n偏好估计 ${recommendation.score}%"
+                } else {
+                    "${recommendation.name}\n规则参考分 ${recommendation.score}"
+                }
                 textSize = 11f
                 minHeight = dp(52)
                 setPadding(dp(2), 0, dp(2), 0)
