@@ -2,41 +2,46 @@
 
 ## 1. 内置眉区预分割模型
 
-应用构建流程从以下地址获取 `faceparsing.tflite`：
+Android 构建流程从 EasyPortrait ONNX 模型仓库下载 `bisenet_fp.onnx`，并将资产命名为 `faceparsing.onnx`。
 
-- 模型页：https://huggingface.co/litert-community/BiSeNet-Face-Parsing-LiteRT
-- 文件地址：https://huggingface.co/litert-community/BiSeNet-Face-Parsing-LiteRT/resolve/main/faceparsing.tflite
-- 架构：BiSeNet，ResNet-18 主干
-- 权重文件约 53 MB，输入为 float32 `[1,3,512,512]`，RGB，按 ImageNet mean/std 归一化
-- 输出为 float32 `[1,19,512,512]`，每个像素对 19 个类别的 logits
-- 标签 2 为左眉毛，标签 3 为右眉毛
-- 本应用取标签 2、3 生成原生眉区掩膜。如果模型加载失败、推理异常或预测几乎为空，则回退到自适应对比度预分割
-- 来源模型页报告 Pixel 8a 的特定 LiteRT GPU 路径约 22 ms，但本应用使用普通 TensorFlow Lite Interpreter 路径，不得把该数字当作本应用在 OPPO Find X7 上的实测速度
+- 模型仓库：https://huggingface.co/sadzip/EasyPortrait-ONNX
+- 原始训练项目：https://github.com/hukenovs/easyportrait
+- 文件大小约 13.4 MB。
+- 模型类别：BiSeNet face parsing。
+- 输入形状：`[1,3,384,384]`，NCHW，BGR 通道顺序，像素值位于 0–255，再按模型卡中的 mean/std 标准化。
+- 输入 mean：`[143.55267075,132.96705975,126.94924335]`。
+- 输入 std：`[60.2625333,60.32740275,59.30988645]`。
+- 输出为 8 类像素 logits，输出形状 `[1,8,384,384]`。应用通过 argmax 获取每像素类别。
+- 类别 2 表示左眉，类别 3 表示右眉。应用映射为原生眉区预分割掩膜，继续支持人工补画/擦除。
+- 如果模型文件无法加载、推理异常或掩膜几乎为空，应用退回自适应对比度预分割。
+- ONNX 导出仓库声称转换结果已与原始 PyTorch/mmseg 输出完成数值与 argmax 一致性验证。此验证不等同于在本应用的顾客、相机或 OPPO Find X7 上完成验证。
 
-### 许可说明
+模型输入、输出与类别来源：
+https://huggingface.co/sadzip/EasyPortrait-ONNX
 
-Hugging Face 模型页将转换后的文件标记为 MIT，模型源为 `zllrunning/face-parsing.PyTorch`。但相关模型基于 CelebAMask-HQ 的 19 类面部解析标注体系。CelebAMask-HQ 官方协议明确将数据集用途限制为非商业研究与教育，并限制对其图像及衍生数据进行商业利用。
+## 2. 许可与署名
 
-因此，仓库虽可在构建时下载并集成该文件进行技术测试，但**不能据此保证使用该模型权重或输出进行收费纹绣服务已获许可**。在收费门店场景启用前，应向权利人确认书面授权，或使用来源、训练数据和权重许可均明确允许该用途的模型。不要把“只自用、不上架”误认为当然属于非商业使用。
+EasyPortrait 仓库将导出模型仓库标注为 Apache-2.0。原始 EasyPortrait 项目声明其数据集与模型采用一个 CC BY-SA 4.0 的变体许可。模型作者在原仓库公开问题中也确认，已发布模型沿用相同许可。
 
-原始数据集协议：
-https://github.com/switchablenorms/CelebAMask-HQ
+- EasyPortrait 原项目许可说明：https://github.com/hukenovs/easyportrait
+- 作者确认模型许可的公开回复：https://github.com/hukenovs/easyportrait/issues/25
+- 具体许可文件：https://github.com/hukenovs/easyportrait/blob/main/license/en_us.pdf
 
-模型卡：
-https://huggingface.co/litert-community/BiSeNet-Face-Parsing-LiteRT
+本项目保留模型来源、署名和许可链接。CC BY-SA 通常要求适当署名，并在分发衍生材料时遵守相同方式共享条件。上游使用的是“变体”许可，使用者应在商用部署或重新分发前阅读具体许可文件并确认其条件。这里的说明不是法律意见。
 
-## 2. 将来提供的客户自训模型
+## 3. 将来提供的客户自训模型
 
-若获得适当授权的门店照片并完成眉毛掩膜人工复核，训练脚本可以生成 `brow_segmentation.tflite`。应用会优先加载该文件，要求：
+应用继续优先尝试加载由获授权顾客标注数据训练的 `brow_segmentation.tflite`。要求：
 
-- 输入：float32 `[1,256,256,3]`，RGB，值域 0–1
-- 输出：float32 `[1,256,256,1]`，sigmoid 概率掩膜
-- 用顾客案例 ID 分组，确保同一顾客不会跨训练集、验证集和测试集
-- 达到独立分组测试门槛仍不代表真实门店已完成前瞻性验证
+- 输入：float32 `[1,256,256,3]`，RGB，值域 0–1。
+- 输出：float32 `[1,256,256,1]`，sigmoid 概率掩膜。
+- 顾客案例 ID 必须按人分组，使同一顾客不会同时出现在训练、验证和测试集合。
+- 独立分组测试达到内部阈值仍不代表已通过真实门店前瞻性验证。
 
-客户自训模型只应由获得相应用途授权的资料训练，并按原始照片授权范围控制访问、保留、导出和删除。
+只使用获得相应用途授权的照片和人工标注，并依授权范围控制访问、保留、导出和删除。
 
-## 3. 眉形排序和三维校正
+## 4. 眉形排序和三维校正
 
-- 眉形推荐没有通过独立验证的通用“最佳眉形”权重。应用保留可解释的几何基线与手工调整，因为个人审美偏好必须由顾客反馈数据来验证。
-- 眉弓三维曲面不能从单张正面照片唯一恢复。实测弧长/弦长修正仍是实验性功能，默认关闭。打印比例校准只能校正整页的缩放，不等同于三维曲面展开。
+- 应用暂时没有通过独立验证的通用“最佳眉形”模型。眉形偏好具有个体性，因此排序仍采用可解释几何基线，需积累真实客户评分后才能训练个性化偏好模型。
+- 应用使用 MediaPipe 的相对 z 深度估计，可选计算局部二维与近似三维线段长度比例。这个 z 值不是毫米级皮肤表面测量，不能称为真实三维重建。该功能默认关闭。
+- 物理打印比例校准单独调整整页尺寸，不会还原眉弓深度。使用前仍需以 20 mm 方框实测打印尺寸。
