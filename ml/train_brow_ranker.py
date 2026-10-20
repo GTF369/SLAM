@@ -139,6 +139,61 @@ def calibration_metrics(y: np.ndarray, probabilities: np.ndarray) -> dict[str, f
     }
 
 
+def geometric_reference_scores(x: np.ndarray) -> np.ndarray:
+    """Reproduce the currently shipped geometric family score for a candidate row."""
+    result = []
+    for row in x:
+        shape_signal = float(np.clip((row[0] - 0.72) / 0.18, -1.0, 1.0))
+        penalty = float(np.clip(row[4] * 35.0, 0.0, 5.0))
+        if row[9] > 0.5:
+            score = 78.0 + (
+                -shape_signal * 6.0 if shape_signal < 0.0 else -shape_signal * 2.0
+            ) - penalty * 0.6
+        elif row[10] > 0.5:
+            score = 76.0 + (
+                shape_signal * 7.0 if shape_signal > 0.0 else shape_signal * 2.0
+            ) - penalty * 0.4
+        else:
+            score = 82.0 - abs(shape_signal) * 3.5 - penalty
+        result.append(score)
+    return np.asarray(result, dtype=np.float64)
+
+
+def clustered_auc_comparison_ci(
+    y: np.ndarray,
+    candidate_scores: np.ndarray,
+    baseline_scores: np.ndarray,
+    groups: np.ndarray,
+    seed: int = 2026,
+    draws: int = 1000,
+) -> dict[str, float]:
+    """Customer-cluster bootstrap for AUC and paired AUC gain over the rule baseline."""
+    unique_groups = np.unique(groups)
+    indices_by_group = {group: np.flatnonzero(groups == group) for group in unique_groups}
+    rng = np.random.default_rng(seed)
+    auc_values: list[float] = []
+    difference_values: list[float] = []
+    for _ in range(draws):
+        sampled_groups = rng.choice(unique_groups, size=len(unique_groups), replace=True)
+        sampled_indices = np.concatenate([indices_by_group[group] for group in sampled_groups])
+        sampled_y = y[sampled_indices]
+        if len(np.unique(sampled_y)) < 2:
+            continue
+        candidate_auc = float(roc_auc_score(sampled_y, candidate_scores[sampled_indices]))
+        baseline_auc = float(roc_auc_score(sampled_y, baseline_scores[sampled_indices]))
+        auc_values.append(candidate_auc)
+        difference_values.append(candidate_auc - baseline_auc)
+    if len(auc_values) < max(100, draws // 2):
+        raise ValueError("Too few valid customer-cluster bootstrap draws. Collect more varied customer ratings.")
+    return {
+        "auc_ci95_low": float(np.quantile(auc_values, 0.025)),
+        "auc_ci95_high": float(np.quantile(auc_values, 0.975)),
+        "auc_gain_over_geometry_ci95_low": float(np.quantile(difference_values, 0.025)),
+        "auc_gain_over_geometry_ci95_high": float(np.quantile(difference_values, 0.975)),
+        "valid_bootstrap_draws": len(auc_values),
+    }
+
+
 def fit_base_model(x: np.ndarray, y: np.ndarray, seed: int):
     scaler = StandardScaler()
     scaled = scaler.fit_transform(x)
@@ -229,14 +284,23 @@ def main() -> None:
         ext_logits = model.decision_function(scaler.transform(ext_x))
         ext_probs = sigmoid(calibrator_intercept + calibrator_slope * ext_logits)
         external_report = calibration_metrics(ext_y, ext_probs)
+        reference_scores = geometric_reference_scores(ext_x)
+        reference_auc = float(roc_auc_score(ext_y, reference_scores))
+        comparison = clustered_auc_comparison_ci(
+            ext_y, ext_probs, reference_scores, ext_groups, seed=args.seed
+        )
         external_report.update({
             "n_cases": len(ext_cases),
             "n_rows": int(len(ext_y)),
             "split": "independent customer-level CSV, disjoint from development and calibration",
+            "geometry_rule_baseline_roc_auc": reference_auc,
+            "customer_cluster_bootstrap": comparison,
         })
         gates = {
             "external_cases_at_least_100": len(ext_cases) >= 100,
             "roc_auc_at_least_0_60": external_report["roc_auc"] >= 0.60,
+            "auc_ci_lower_above_chance": comparison["auc_ci95_low"] > 0.50,
+            "auc_gain_over_rule_lower_ci_above_zero": comparison["auc_gain_over_geometry_ci95_low"] > 0.0,
             "brier_better_than_prevalence_baseline": (
                 external_report["brier_score"] < external_report["prevalence_baseline_brier_score"]
             ),
