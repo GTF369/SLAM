@@ -35,6 +35,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.animation.LinearInterpolator
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -64,6 +65,7 @@ import java.io.FileOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
+import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
@@ -99,6 +101,7 @@ class MainActivity : AppCompatActivity() {
     private var imageCapture: ImageCapture? = null
     private var imageExecutor: ExecutorService? = null
     private var captureInProgress = false
+    private var currentCaseId: String = UUID.randomUUID().toString()
     private val lastTimestamp = AtomicLong(0L)
     private val cameraPermission = 701
     private var frameWidth = 640
@@ -190,6 +193,10 @@ class MainActivity : AppCompatActivity() {
             "方案对比" to { showComparison() },
             "保存效果图" to { savePreviewToGallery() },
             "1:1 打印" to { askPrintCalibration() }
+        ))
+        addButtonRow(designControls, listOf(
+            "顾客偏好" to { recordPreference() },
+            "导出偏好数据" to { exportPreferenceCsv() }
         ))
         addButtonRow(designControls, listOf(
             "曲率标定" to { showCurvatureCalibration() },
@@ -566,6 +573,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun enterDesignMode(photo: Bitmap, photoPoints: List<PointF>) {
         stopTransition()
+        currentCaseId = UUID.randomUUID().toString()
         capturedPhoto?.recycle()
         capturedPhoto = photo
         designMode = true
@@ -956,6 +964,125 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun recordPreference() {
+        val points = browView.facePoints()
+        if (capturedPhoto == null || points.size < 455) {
+            Toast.makeText(this, "请先完成拍照和眉形设计", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val ratingLabel = TextView(this).apply {
+            text = "顾客满意度：5 / 5"
+            textSize = 15f
+        }
+        val ratingBar = SeekBar(this).apply {
+            max = 4
+            progress = 4
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    ratingLabel.text = "顾客满意度：${progress + 1} / 5"
+                }
+            })
+        }
+        val selected = CheckBox(this).apply {
+            text = "顾客最终选择此方案"
+            isChecked = true
+        }
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+            addView(TextView(this@MainActivity).apply {
+                text = "记录的是匿名几何特征、方案参数和顾客反馈，不保存照片或身份信息。需先获得顾客授权。"
+                textSize = 13f
+            })
+            addView(ratingLabel)
+            addView(ratingBar)
+            addView(selected)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("记录顾客偏好")
+            .setView(form)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("保存反馈") { _, _ ->
+                val features = BrowRecommendationEngine.measurements(points)
+                val dataset = org.json.JSONArray(
+                    getSharedPreferences("brow_preference_feedback", Context.MODE_PRIVATE).getString("records", "[]")
+                )
+                val item = org.json.JSONObject().apply {
+                    put("case_id", currentCaseId)
+                    put("style", when (params.style) { 1 -> "soft"; 2 -> "defined"; else -> "natural" })
+                    put("thickness", params.thickness.toDouble())
+                    put("length", params.length.toDouble())
+                    put("arch", params.arch.toDouble())
+                    put("rating", ratingBar.progress + 1)
+                    put("selected", selected.isChecked)
+                    put("face_width_height_ratio", features.first.toDouble())
+                    put("brow_asymmetry_ratio", features.second.toDouble())
+                    put("timestamp", System.currentTimeMillis())
+                }
+                dataset.put(item)
+                getSharedPreferences("brow_preference_feedback", Context.MODE_PRIVATE).edit()
+                    .putString("records", dataset.toString())
+                    .apply()
+                Toast.makeText(this, "已保存匿名偏好记录，可导出 CSV 用于后续模型训练", Toast.LENGTH_LONG).show()
+            }
+            .show()
+    }
+
+    private fun exportPreferenceCsv() {
+        val records = org.json.JSONArray(
+            getSharedPreferences("brow_preference_feedback", Context.MODE_PRIVATE).getString("records", "[]")
+        )
+        if (records.length() == 0) {
+            Toast.makeText(this, "暂无顾客偏好记录", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val csv = buildString {
+            append("case_id,style,thickness,length,arch,rating,selected,face_width_height_ratio,brow_asymmetry_ratio,timestamp\n")
+            for (i in 0 until records.length()) {
+                val row = records.optJSONObject(i) ?: continue
+                append(row.optString("case_id")).append(',')
+                append(row.optString("style")).append(',')
+                append(row.optDouble("thickness")).append(',')
+                append(row.optDouble("length")).append(',')
+                append(row.optDouble("arch")).append(',')
+                append(row.optInt("rating")).append(',')
+                append(row.optBoolean("selected")).append(',')
+                append(row.optDouble("face_width_height_ratio")).append(',')
+                append(row.optDouble("brow_asymmetry_ratio")).append(',')
+                append(row.optLong("timestamp")).append('\n')
+            }
+        }
+        val filename = "brow_preference_feedback_${System.currentTimeMillis()}.csv"
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, filename)
+                    put(MediaStore.Downloads.MIME_TYPE, "text/csv")
+                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/BrowDesign")
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: throw IllegalStateException("无法创建 CSV 文件")
+                contentResolver.openOutputStream(uri)?.use { it.write(csv.toByteArray(Charsets.UTF_8)) }
+                    ?: throw IllegalStateException("无法写入 CSV")
+                values.clear()
+                values.put(MediaStore.Downloads.IS_PENDING, 0)
+                contentResolver.update(uri, values, null, null)
+                Toast.makeText(this, "偏好数据已导出到 Downloads/BrowDesign", Toast.LENGTH_LONG).show()
+            } else {
+                val directory = File(getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "BrowDesign")
+                if (!directory.exists()) directory.mkdirs()
+                val file = File(directory, filename)
+                file.writeText(csv, Charsets.UTF_8)
+                Toast.makeText(this, "偏好数据已导出：" + file.absolutePath, Toast.LENGTH_LONG).show()
+            }
+        } catch (e: Exception) {
+            Toast.makeText(this, "导出失败：" + (e.message ?: "请重试"), Toast.LENGTH_LONG).show()
+        }
+    }
+
     private fun askPrintCalibration() {
         val points = browView.facePoints()
         if (points.size < 470 || capturedPhoto == null) {
@@ -1128,18 +1255,21 @@ private data class BrowRecommendation(
  * Scores are not probabilities and must not be presented as validated AI output.
  */
 private object BrowRecommendationEngine {
+    fun measurements(points: List<PointF>): Pair<Float, Float> {
+        if (points.size <= 454) return 0f to 0f
+        val faceWidth = distance(points[234], points[454])
+        val faceHeight = distance(points.getOrNull(10) ?: points[234], points.getOrNull(152) ?: points[454]).coerceAtLeast(1f)
+        val ratio = faceWidth / faceHeight
+        val asymmetry = if (points.size > 334) abs(points[105].y - points[334].y) / faceHeight else 0f
+        return ratio to asymmetry
+    }
+
     fun rank(points: List<PointF>): List<BrowRecommendation> {
         if (points.size <= 454) return defaultSuggestions()
-        val left = points[234]
-        val right = points[454]
-        val top = points.getOrNull(10) ?: return defaultSuggestions()
-        val chin = points.getOrNull(152) ?: return defaultSuggestions()
-        val faceWidth = distance(left, right)
-        val faceHeight = distance(top, chin).coerceAtLeast(1f)
-        val widthHeightRatio = faceWidth / faceHeight
+        val widthHeightRatio = measurements(points).first
+        val browHeightDifference = measurements(points).second
         // This is only a tunable heuristic signal, not a clinical or population norm.
         val shapeSignal = ((widthHeightRatio - 0.72f) / 0.18f).coerceIn(-1f, 1f)
-        val browHeightDifference = if (points.size > 334) abs(points[105].y - points[334].y) / faceHeight else 0f
         val asymmetryPenalty = (browHeightDifference * 35f).coerceIn(0f, 5f)
         val naturalScore = (82f - abs(shapeSignal) * 3.5f - asymmetryPenalty).roundToInt().coerceIn(60, 95)
         val softScore = (78f + if (shapeSignal < 0f) -shapeSignal * 6f else -shapeSignal * 2f - asymmetryPenalty * 0.6f).roundToInt().coerceIn(60, 95)
