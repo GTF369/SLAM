@@ -1413,6 +1413,9 @@ class MainActivity : AppCompatActivity() {
             imageExecutor = Executors.newSingleThreadExecutor()
         }
         val generation = ++segmentationGeneration
+        // Preserve native-shape mode only if the artist had already explicitly enabled it.
+        // A heuristic pixel-density score is not evidence that an unvalidated parser mask is correct.
+        val preserveArtistApprovedNativeShape = useNativeShape
         segmentationLabel.text = "正在识别原生眉区…"
         imageExecutor?.execute {
             val result = try {
@@ -1432,18 +1435,18 @@ class MainActivity : AppCompatActivity() {
                     browView.setSegmentationResult(null, false)
                     showNativeSegmentation = false
                 } else {
-                    browView.setSegmentationResult(result, showNativeSegmentation)
+                    // Show the editable mask immediately after capture so the artist can
+                    // visually verify the upstream parser's label mapping and contour.
+                    showNativeSegmentation = true
+                    browView.setSegmentationResult(result, true)
                     val contourUsable = browView.hasUsableNativeContour()
-                    // Use the native contour as the first draft only when contour
-                    // extraction succeeds and the density-based heuristic is not at
-                    // its lowest tier. The artist must still review/edit the mask.
-                    useNativeShape = contourUsable && result.maskQualityScore >= 0.58f
+                    useNativeShape = preserveArtistApprovedNativeShape && contourUsable
                     browView.setNativeShapeMode(useNativeShape)
                     segmentationLabel.text = "识别方式：${result.method} · 掩膜质量提示 ${(result.maskQualityScore * 100).toInt()}%（按像素占比估算，非模型置信概率）· 识别像素 ${result.selectedPixelCount} · 请人工检查边界"
-                    status.text = if (useNativeShape) {
-                        "已自动按原生眉区生成初稿。请检查绿色识别层并修正边界，再确认或保存方案。"
+                    status.text = if (contourUsable) {
+                        "已识别原生眉区，请检查绿色覆盖层。确认轮廓正确后，再点“以原生眉形作底稿”使用。"
                     } else {
-                        "眉区轮廓不够可靠，当前使用参数化初稿。可调整灵敏度、手工补画/擦除后再切换原生眉形。"
+                        "眉区轮廓无法可靠提取，当前保留参数化初稿。可调整灵敏度或手工补画/擦除后重新检查。"
                     }
                 }
             }
