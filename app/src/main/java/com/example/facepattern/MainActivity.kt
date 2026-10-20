@@ -2150,6 +2150,8 @@ private object BrowRecommendationEngine {
                 !external.optBoolean("passed_release_gates", false) ||
                 !gates.optBoolean("external_cases_at_least_100", false) ||
                 !gates.optBoolean("roc_auc_at_least_0_60", false) ||
+                !gates.optBoolean("auc_ci_lower_above_chance", false) ||
+                !gates.optBoolean("auc_gain_over_rule_lower_ci_above_zero", false) ||
                 !gates.optBoolean("brier_better_than_prevalence_baseline", false) ||
                 !gates.optBoolean("ece_at_most_0_10", false)) return null
             val expectedFeatures = listOf(
