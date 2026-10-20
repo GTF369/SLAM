@@ -276,6 +276,9 @@ class MainActivity : AppCompatActivity() {
             "1:1 打印" to { askPrintCalibration() }
         ))
         addButtonRow(designControls, listOf(
+            "导出原始标注照片" to { exportOriginalPhotoForAnnotation() }
+        ))
+        addButtonRow(designControls, listOf(
             "顾客偏好" to { recordPreference() },
             "导出偏好数据" to { exportPreferenceCsv() },
             "清除本机记录" to { clearLocalRecords() }
@@ -980,6 +983,49 @@ class MainActivity : AppCompatActivity() {
             .setTitle("方案对比")
             .setView(scroller)
             .setPositiveButton("完成", null)
+            .show()
+    }
+
+    private fun exportOriginalPhotoForAnnotation() {
+        val photo = capturedPhoto ?: run {
+            Toast.makeText(this, "请先拍照", Toast.LENGTH_SHORT).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("导出原始人脸照片")
+            .setMessage("该操作会将未叠加眉形的完整人脸照片保存到手机相册，供你在获得单独明确授权后进行本地人工标注和训练。照片可识别顾客身份，请勿未经授权上传、共享或用于其他用途。")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("保存原始照片") { _, _ ->
+                val filename = "BrowAnnotation_${currentCaseId}_${System.currentTimeMillis()}.png"
+                var uri: android.net.Uri? = null
+                var output: java.io.OutputStream? = null
+                try {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Images.Media.DISPLAY_NAME, filename)
+                        put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                        put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/BrowDesign/AnnotationSource")
+                        put(MediaStore.Images.Media.IS_PENDING, 1)
+                    }
+                    uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                        ?: throw IllegalStateException("无法创建原始照片文件")
+                    output = contentResolver.openOutputStream(uri)
+                        ?: throw IllegalStateException("无法写入照片文件")
+                    if (!photo.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                        throw IllegalStateException("照片编码失败")
+                    }
+                    output.close()
+                    output = null
+                    values.clear()
+                    values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                    contentResolver.update(uri, values, null, null)
+                    Toast.makeText(this, "原始标注照片已保存到 Pictures/BrowDesign/AnnotationSource", Toast.LENGTH_LONG).show()
+                } catch (e: Exception) {
+                    if (uri != null) contentResolver.delete(uri, null, null)
+                    Toast.makeText(this, "导出失败：" + (e.message ?: "请重试"), Toast.LENGTH_LONG).show()
+                } finally {
+                    try { output?.close() } catch (_: Exception) {}
+                }
+            }
             .show()
     }
 
