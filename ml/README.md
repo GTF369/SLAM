@@ -14,6 +14,14 @@ Install dependencies:
 python -m pip install -r ml/requirements.txt
 ```
 
+For a convenience split of one collected export, run:
+
+```bash
+python ml/split_preference_cases.py brow_preference_feedback.csv --output-dir ml/data_splits
+```
+
+This groups all candidate rows from the same anonymous customer in one file. It is a reproducible customer-level holdout from the same collection, not a prospective future-cohort study. For stronger evidence, replace the external split with feedback from new customers collected after the model-development and calibration process has been frozen.
+
 Prepare three CSV files containing mutually disjoint anonymous customers:
 
 - **Development CSV**: used to train model coefficients and for an internal case-grouped 80/20 diagnostic split.
@@ -21,9 +29,9 @@ Prepare three CSV files containing mutually disjoint anonymous customers:
 - **External validation CSV**: used only once for a final estimate of ranking/discrimination and calibration quality. It must not be used to tune the model.
 
 ```bash
-python ml/train_brow_ranker.py development.csv \
-  --calibration-csv calibration.csv \
-  --external-validation-csv external_validation.csv \
+python ml/train_brow_ranker.py ml/data_splits/development.csv \
+  --calibration-csv ml/data_splits/calibration.csv \
+  --external-validation-csv ml/data_splits/external_validation.csv \
   --output app/src/main/assets/brow_ranker.json
 ```
 
