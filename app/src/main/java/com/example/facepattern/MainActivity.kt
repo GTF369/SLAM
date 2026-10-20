@@ -304,8 +304,11 @@ class MainActivity : AppCompatActivity() {
             "模型来源与许可" to { showModelLicenseNotice() }
         ))
         addButtonRow(designControls, listOf(
+            "匿名案例编号" to { editAnonymousCaseId() },
             "顾客偏好" to { recordPreference() },
-            "导出偏好数据" to { exportPreferenceCsv() },
+            "导出偏好数据" to { exportPreferenceCsv() }
+        ))
+        addButtonRow(designControls, listOf(
             "清除本机记录" to { clearLocalRecords() }
         ))
         addButtonRow(designControls, listOf(
@@ -1431,6 +1434,45 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    private fun editAnonymousCaseId() {
+        val input = EditText(this).apply {
+            setSingleLine(true)
+            hint = "例如随机编号 CUST_7F2A"
+            setText(currentCaseId)
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
+        val explanation = TextView(this).apply {
+            text = "编号用于把同一顾客的多套方案和重复测量归为同一统计案例。若同一顾客重新拍摄或回访并参与数据收集，请在取得授权后重复使用同一随机编号。不要使用姓名、手机号、预约号或其他可识别身份的信息。点击“新随机编号”可为另一位顾客生成编号。"
+            textSize = 13f
+            setPadding(dp(16), dp(8), dp(16), dp(4))
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(explanation)
+            addView(input)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("匿名案例编号")
+            .setView(content)
+            .setNegativeButton("取消", null)
+            .setNeutralButton("新随机编号") { _, _ ->
+                currentCaseId = UUID.randomUUID().toString().take(8)
+                Toast.makeText(this, "已生成新的随机案例编号", Toast.LENGTH_SHORT).show()
+            }
+            .setPositiveButton("保存编号") { _, _ ->
+                val sanitized = input.text.toString().trim()
+                    .filter { it.isLetterOrDigit() || it == '_' || it == '-' }
+                    .take(32)
+                if (sanitized.length < 4) {
+                    Toast.makeText(this, "请输入至少 4 位随机编号，不要使用个人身份信息", Toast.LENGTH_LONG).show()
+                } else {
+                    currentCaseId = sanitized
+                    Toast.makeText(this, "匿名案例编号已更新，后续偏好和曲率记录将使用该编号", Toast.LENGTH_LONG).show()
+                }
+            }
+            .show()
     }
 
     private fun recordPreference() {
