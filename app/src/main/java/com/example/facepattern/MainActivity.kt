@@ -138,6 +138,9 @@ class MainActivity : AppCompatActivity() {
     private var useNativeShape = false
     private var segmentationResult: BrowSegmentationResult? = null
     private var showNativeSegmentation = false
+    // Only reviewed/confirmed segmentation masks may contribute brow-shape features
+    // to preference collection and any future trained model.
+    private var segmentationReviewed = false
     private var segmentationSensitivity = 0.72f
     private var segmentationGeneration = 0
 
@@ -252,16 +255,30 @@ class MainActivity : AppCompatActivity() {
         ))
         addButtonRow(designControls, listOf(
             "画入缺失眉区" to {
+                // Editing invalidates the previous review until the artist confirms again.
+                segmentationReviewed = false
+                useNativeShape = false
+                browView.setNativeShapeMode(false)
                 showNativeSegmentation = true
                 browView.setSegmentationEditMode(true, includePixels = true)
                 toggleNativeSegmentation()
             },
             "擦除误识别" to {
+                segmentationReviewed = false
+                useNativeShape = false
+                browView.setNativeShapeMode(false)
                 showNativeSegmentation = true
                 browView.setSegmentationEditMode(true, includePixels = false)
                 toggleNativeSegmentation()
             },
-            "完成修正" to { browView.setSegmentationEditMode(false) }
+            "完成修正" to {
+                browView.setSegmentationEditMode(false)
+                segmentationReviewed = segmentationResult != null
+                if (segmentationReviewed) {
+                    segmentationLabel.text = "已由纹绣师确认识别层。掩膜特征可用于本次设计反馈，仍需检查实际眉形。"
+                    refreshRecommendations(browView.facePoints())
+                }
+            }
         ))
         addButtonRow(designControls, listOf(
             "以原生眉形作底稿" to { toggleNativeShapeDesign() },
@@ -304,8 +321,11 @@ class MainActivity : AppCompatActivity() {
             "模型来源与许可" to { showModelLicenseNotice() }
         ))
         addButtonRow(designControls, listOf(
+            "匿名案例编号" to { editAnonymousCaseId() },
             "顾客偏好" to { recordPreference() },
-            "导出偏好数据" to { exportPreferenceCsv() },
+            "导出偏好数据" to { exportPreferenceCsv() }
+        ))
+        addButtonRow(designControls, listOf(
             "清除本机记录" to { clearLocalRecords() }
         ))
         addButtonRow(designControls, listOf(
@@ -800,11 +820,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshRecommendations(points: List<PointF>) {
         recommendationRow.removeAllViews()
-        val ranked = BrowRecommendationEngine.rank(this, points)
+        val ranked = BrowRecommendationEngine.rank(this, points, segmentationResult, segmentationReviewed, useNativeShape)
         recommendationLabel.text = BrowRecommendationEngine.sourceLabel(this)
         ranked.forEach { recommendation ->
             val button = Button(this).apply {
-                text = "${recommendation.name}\n参考分 ${recommendation.score}"
+                text = if (BrowRecommendationEngine.hasApprovedModel(this@MainActivity)) {
+                    "${recommendation.name}\n偏好估计 ${recommendation.score}%"
+                } else {
+                    "${recommendation.name}\n规则参考分 ${recommendation.score}"
+                }
                 textSize = 11f
                 minHeight = dp(52)
                 setPadding(dp(2), 0, dp(2), 0)
@@ -826,6 +850,10 @@ class MainActivity : AppCompatActivity() {
         normalizedDepths: List<Float> = emptyList()
     ) {
         stopTransition()
+        // A stable random anonymous ID belongs to one customer/design session.
+        // Generating it only once per Activity would merge unrelated customers in
+        // the feedback and curvature datasets, corrupting customer-level validation.
+        currentCaseId = UUID.randomUUID().toString().take(8)
         segmentationGeneration++
         savedPlans.forEach { it.segmentationSnapshot?.overlay?.recycle() }
         savedPlans.clear()
@@ -833,6 +861,7 @@ class MainActivity : AppCompatActivity() {
         segmentationResult?.overlay?.recycle()
         segmentationResult = null
         showNativeSegmentation = false
+        segmentationReviewed = false
         useNativeShape = false
         browView.setNativeShapeMode(false)
         if (::segmentationLabel.isInitialized) segmentationLabel.text = "原生眉区识别：尚未运行"
@@ -860,7 +889,11 @@ class MainActivity : AppCompatActivity() {
         landmarker = null
         cameraExecutor?.shutdown()
         cameraExecutor = null
-        status.text = "高分辨率照片已分析，可调整眉形并保存多个方案"
+        status.text = "高分辨率照片已分析，正在自动识别原生眉区并生成初稿。请核查识别轮廓后再用于打印。"
+        // Start the brow-region parser automatically so the first draft can follow
+        // the customer's natural brow contour without requiring an extra setup tap.
+        // The asynchronous result remains editable and is not treated as a final stencil.
+        runSegmentation()
     }
 
     private fun retakePhoto() {
@@ -869,6 +902,7 @@ class MainActivity : AppCompatActivity() {
         segmentationResult?.overlay?.recycle()
         segmentationResult = null
         showNativeSegmentation = false
+        segmentationReviewed = false
         useNativeShape = false
         browView.setNativeShapeMode(false)
         if (::segmentationLabel.isInitialized) segmentationLabel.text = "原生眉区识别：尚未运行"
@@ -877,6 +911,7 @@ class MainActivity : AppCompatActivity() {
         capturedPhoto?.recycle()
         capturedPhoto = null
         capturedLandmarkDepths = emptyList()
+        segmentationReviewed = false
         browView.setPhoto(null)
         browView.setParams(params)
         previewView.visibility = View.VISIBLE
@@ -996,6 +1031,7 @@ class MainActivity : AppCompatActivity() {
         }
         showNativeSegmentation = false
         useNativeShape = plan.useNativeShape && segmentationResult != null
+        segmentationReviewed = useNativeShape
         browView.setSegmentationResult(segmentationResult, false)
         browView.setNativeShapeMode(useNativeShape)
         params = plan.params.copy()
@@ -1244,17 +1280,25 @@ class MainActivity : AppCompatActivity() {
                 }
                 old.put(item)
                 prefs.edit().putString("records", old.toString()).apply()
-                val samples = (0 until old.length()).mapNotNull { index ->
-                    old.optJSONObject(index)?.takeIf { it.optString("region") == region.selectedItem.toString() }
-                        ?.optDouble("factor")?.takeIf { it.isFinite() }
+                val factorsByCase = mutableMapOf<String, MutableList<Float>>()
+                for (index in 0 until old.length()) {
+                    val row = old.optJSONObject(index) ?: continue
+                    if (row.optString("region") != region.selectedItem.toString()) continue
+                    val caseId = row.optString("case_id").trim()
+                    val factorValue = row.optDouble("factor", Double.NaN)
+                    if (caseId.isBlank() || !factorValue.isFinite() || factorValue !in 1.0..1.5708) continue
+                    factorsByCase.getOrPut(caseId) { mutableListOf() }.add(factorValue.toFloat())
                 }
-                val interval = if (samples.size >= 5) {
-                    val sorted = samples.sorted()
-                    val low = sorted[((sorted.size - 1) * 0.10).toInt()]
-                    val high = sorted[((sorted.size - 1) * 0.90).toInt()]
-                    "该区域已有 ${samples.size} 条记录，样本 10%–90% 分位区间约为 ${"%.3f".format(low)}–${"%.3f".format(high)}。这只是本机样本的经验区间，不代表人群通用区间。"
+                // Collapse repeated measurements within the same anonymous client before
+                // reporting an empirical range, otherwise frequent repeat measurements
+                // would be incorrectly treated as independent customers.
+                val caseMeans = factorsByCase.values.map { values -> values.average().toFloat() }
+                val interval = if (caseMeans.size >= 30) {
+                    val low = empiricalQuantile(caseMeans, 0.10)
+                    val high = empiricalQuantile(caseMeans, 0.90)
+                    "该区域已有 ${caseMeans.size} 位不同顾客。按顾客内重复测量取均值后，样本 P10–P90 经验区间约为 ${"%.3f".format(low)}–${"%.3f".format(high)}。这是当前样本的描述性区间，不是个体预测区间，也不代表通用解剖范围。"
                 } else {
-                    "该区域已记录 ${samples.size} 条样本。建议至少采集 30–50 个不同顾客的标准化记录，再评估区间稳定性。"
+                    "该区域已有 ${caseMeans.size} 位不同顾客的记录。至少需要约 30–50 位不同顾客才能初步评估人群区间，正式应用仍需独立测量与转印验证。"
                 }
                 val radiusText = if (estimatedRadiusMm == null) {
                     "半径估计不稳定，可能接近平坦"
@@ -1265,6 +1309,17 @@ class MainActivity : AppCompatActivity() {
             }
             .setNeutralButton("导出 CSV") { _, _ -> exportCurvatureCsv() }
             .show()
+    }
+
+    private fun empiricalQuantile(values: List<Float>, probability: Double): Float {
+        if (values.isEmpty()) return Float.NaN
+        val sorted = values.sorted()
+        val p = probability.coerceIn(0.0, 1.0)
+        val position = (sorted.size - 1) * p
+        val lower = position.toInt()
+        val upper = min(sorted.lastIndex, lower + 1)
+        val weight = (position - lower).toFloat()
+        return sorted[lower] * (1f - weight) + sorted[upper] * weight
     }
 
     private fun estimateCircularArcRadius(chordMm: Float, arcMm: Float): Float? {
@@ -1354,6 +1409,7 @@ class MainActivity : AppCompatActivity() {
             useNativeShape = false
             browView.setNativeShapeMode(false)
             status.text = "已切换到参数化眉形底稿"
+            refreshRecommendations(browView.facePoints())
             return
         }
         val result = segmentationResult
@@ -1369,13 +1425,17 @@ class MainActivity : AppCompatActivity() {
             browView.setSegmentationResult(result, true)
             return
         }
+        // Choosing this action is an explicit acceptance of the visible mask.
+        // From this point, mask-derived features may be included in anonymous feedback.
+        segmentationReviewed = true
         useNativeShape = true
         showNativeSegmentation = false
         browView.setSegmentationEditMode(false)
         browView.setSegmentationResult(result, false)
         browView.setNativeShapeMode(true)
-        segmentationLabel.text = "正在使用原生眉区轮廓生成底稿。请调整后人工确认边界。"
+        segmentationLabel.text = "已确认原生眉区轮廓。仍请在预览和打印前复核边界。"
         status.text = "已切换到原生眉形轮廓底稿，可微调粗细、长度和弧度"
+        refreshRecommendations(browView.facePoints())
     }
 
     private fun runSegmentation() {
@@ -1389,6 +1449,11 @@ class MainActivity : AppCompatActivity() {
             imageExecutor = Executors.newSingleThreadExecutor()
         }
         val generation = ++segmentationGeneration
+        // A newly generated mask has not yet been reviewed, even when the previous
+        // mask was accepted. Do not use its derived features until the artist confirms it.
+        segmentationReviewed = false
+        useNativeShape = false
+        browView.setNativeShapeMode(false)
         segmentationLabel.text = "正在识别原生眉区…"
         imageExecutor?.execute {
             val result = try {
@@ -1408,12 +1473,62 @@ class MainActivity : AppCompatActivity() {
                     browView.setSegmentationResult(null, false)
                     showNativeSegmentation = false
                 } else {
-                    browView.setSegmentationResult(result, showNativeSegmentation)
-                    browView.setNativeShapeMode(useNativeShape)
+                    // Show the editable mask immediately after capture so the artist can
+                    // visually verify the upstream parser's label mapping and contour.
+                    showNativeSegmentation = true
+                    browView.setSegmentationResult(result, true)
+                    val contourUsable = browView.hasUsableNativeContour()
+                    useNativeShape = false
+                    browView.setNativeShapeMode(false)
                     segmentationLabel.text = "识别方式：${result.method} · 掩膜质量提示 ${(result.maskQualityScore * 100).toInt()}%（按像素占比估算，非模型置信概率）· 识别像素 ${result.selectedPixelCount} · 请人工检查边界"
+                    status.text = if (contourUsable) {
+                        "已识别原生眉区，请检查绿色覆盖层。点击“完成修正”确认掩膜，或直接点“以原生眉形作底稿”接受并使用。"
+                    } else {
+                        "眉区轮廓无法可靠提取，当前保留参数化初稿。可调整灵敏度或手工补画/擦除后重新检查。"
+                    }
+                    refreshRecommendations(points)
                 }
             }
         }
+    }
+
+    private fun editAnonymousCaseId() {
+        val input = EditText(this).apply {
+            setSingleLine(true)
+            hint = "例如随机编号 CUST_7F2A"
+            setText(currentCaseId)
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
+        val explanation = TextView(this).apply {
+            text = "编号用于把同一顾客的多套方案和重复测量归为同一统计案例。若同一顾客重新拍摄或回访并参与数据收集，请在取得授权后重复使用同一随机编号。不要使用姓名、手机号、预约号或其他可识别身份的信息。点击“新随机编号”可为另一位顾客生成编号。"
+            textSize = 13f
+            setPadding(dp(16), dp(8), dp(16), dp(4))
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(explanation)
+            addView(input)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("匿名案例编号")
+            .setView(content)
+            .setNegativeButton("取消", null)
+            .setNeutralButton("新随机编号") { _, _ ->
+                currentCaseId = UUID.randomUUID().toString().take(8)
+                Toast.makeText(this, "已生成新的随机案例编号", Toast.LENGTH_SHORT).show()
+            }
+            .setPositiveButton("保存编号") { _, _ ->
+                val sanitized = input.text.toString().trim()
+                    .filter { it.isLetterOrDigit() || it == '_' || it == '-' }
+                    .take(32)
+                if (sanitized.length < 4) {
+                    Toast.makeText(this, "请输入至少 4 位随机编号，不要使用个人身份信息", Toast.LENGTH_LONG).show()
+                } else {
+                    currentCaseId = sanitized
+                    Toast.makeText(this, "匿名案例编号已更新，后续偏好和曲率记录将使用该编号", Toast.LENGTH_LONG).show()
+                }
+            }
+            .show()
     }
 
     private fun recordPreference() {
@@ -1464,7 +1579,7 @@ class MainActivity : AppCompatActivity() {
             .setView(form)
             .setNegativeButton("取消", null)
             .setPositiveButton("保存反馈") { _, _ ->
-                val features = BrowRecommendationEngine.measurements(points)
+                val features = BrowRecommendationEngine.measurements(points, segmentationResult, segmentationReviewed, useNativeShape)
                 val dataset = org.json.JSONArray(
                     getSharedPreferences("brow_preference_feedback", Context.MODE_PRIVATE).getString("records", "[]")
                 )
@@ -1486,6 +1601,10 @@ class MainActivity : AppCompatActivity() {
                     put("brow_eye_distance_ratio", features.browEyeDistanceRatio.toDouble())
                     put("brow_asymmetry_ratio", features.browAsymmetryRatio.toDouble())
                     put("eye_line_tilt", features.eyeLineTilt.toDouble())
+                    put("native_brow_area_fraction", features.nativeBrowAreaFraction.toDouble())
+                    put("native_brow_side_imbalance", features.nativeBrowSideImbalance.toDouble())
+                    put("native_brow_mask_available", features.nativeBrowMaskAvailable.toDouble())
+                    put("native_shape_mode", features.nativeShapeMode.toDouble())
                     put("timestamp", System.currentTimeMillis())
                 }
                 dataset.put(item)
@@ -1528,7 +1647,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val csv = buildString {
-            append("case_id,style,thickness,length,arch,rating,selected,face_width_height_ratio,interocular_face_width_ratio,jaw_face_width_ratio,brow_eye_distance_ratio,brow_asymmetry_ratio,eye_line_tilt,timestamp\n")
+            append("case_id,style,thickness,length,arch,rating,selected,face_width_height_ratio,interocular_face_width_ratio,jaw_face_width_ratio,brow_eye_distance_ratio,brow_asymmetry_ratio,eye_line_tilt,native_brow_area_fraction,native_brow_side_imbalance,native_brow_mask_available,native_shape_mode,timestamp\n")
             for (i in 0 until records.length()) {
                 val row = records.optJSONObject(i) ?: continue
                 append(row.optString("case_id")).append(',')
@@ -1544,6 +1663,10 @@ class MainActivity : AppCompatActivity() {
                 append(row.optDouble("brow_eye_distance_ratio")).append(',')
                 append(row.optDouble("brow_asymmetry_ratio")).append(',')
                 append(row.optDouble("eye_line_tilt")).append(',')
+                append(row.optDouble("native_brow_area_fraction")).append(',')
+                append(row.optDouble("native_brow_side_imbalance")).append(',')
+                append(row.optDouble("native_brow_mask_available")).append(',')
+                append(row.optDouble("native_shape_mode")).append(',')
                 append(row.optLong("timestamp")).append('\n')
             }
         }
@@ -1995,7 +2118,11 @@ private data class BrowFaceMeasurements(
     val jawFaceWidthRatio: Float,
     val browEyeDistanceRatio: Float,
     val browAsymmetryRatio: Float,
-    val eyeLineTilt: Float
+    val eyeLineTilt: Float,
+    val nativeBrowAreaFraction: Float = 0f,
+    val nativeBrowSideImbalance: Float = 0f,
+    val nativeBrowMaskAvailable: Float = 0f,
+    val nativeShapeMode: Float = 0f
 )
 
 /**
@@ -2007,13 +2134,24 @@ private object BrowRecommendationEngine {
         val means: FloatArray,
         val scales: FloatArray,
         val coefficients: FloatArray,
-        val intercept: Float
+        val intercept: Float,
+        val calibrationIntercept: Float,
+        val calibrationSlope: Float
     )
     private var loadAttempted = false
     private var trainedModel: TrainedModel? = null
 
-    fun measurements(points: List<PointF>): BrowFaceMeasurements {
-        if (points.size <= 454) return BrowFaceMeasurements(0f, 0f, 0f, 0f, 0f, 0f)
+    fun measurements(
+        points: List<PointF>,
+        segmentation: BrowSegmentationResult? = null,
+        maskReviewed: Boolean = false,
+        nativeShapeMode: Boolean = false
+    ): BrowFaceMeasurements {
+        val maskFeatures = nativeBrowMaskFeatures(segmentation, maskReviewed)
+        if (points.size <= 454) {
+            return BrowFaceMeasurements(0f, 0f, 0f, 0f, 0f, 0f,
+                maskFeatures[0], maskFeatures[1], maskFeatures[2], if (nativeShapeMode) 1f else 0f)
+        }
         val faceWidth = distance(points[234], points[454]).coerceAtLeast(1f)
         val faceHeight = distance(
             points.getOrNull(10) ?: points[234],
@@ -2037,19 +2175,74 @@ private object BrowRecommendationEngine {
             jawWidth / faceWidth,
             browEyeDistance,
             asymmetry,
-            eyeTilt
+            eyeTilt,
+            maskFeatures[0],
+            maskFeatures[1],
+            maskFeatures[2],
+            if (nativeShapeMode) 1f else 0f
         )
     }
 
+    /**
+     * Mask area fractions describe the reviewed pixels relative to each model ROI.
+     * They are engineering features, not measurements of real hair thickness or
+     * proof that the parser mask is anatomically correct.
+     */
+    private fun nativeBrowMaskFeatures(
+        segmentation: BrowSegmentationResult?,
+        reviewed: Boolean
+    ): FloatArray {
+        if (!reviewed || segmentation == null || segmentation.overlay.isRecycled ||
+            segmentation.regions.size < 2) return floatArrayOf(0f, 0f, 0f)
+        return try {
+            val mask = segmentation.overlay
+            val pixels = IntArray(mask.width * mask.height)
+            mask.getPixels(pixels, 0, mask.width, 0, 0, mask.width, mask.height)
+            val fractions = segmentation.regions.take(2).mapNotNull { bounds ->
+                if (bounds.size < 4) return@mapNotNull null
+                val x0 = (bounds[0] - segmentation.offsetX).coerceIn(0, mask.width)
+                val y0 = (bounds[1] - segmentation.offsetY).coerceIn(0, mask.height)
+                val x1 = (bounds[2] - segmentation.offsetX).coerceIn(x0, mask.width)
+                val y1 = (bounds[3] - segmentation.offsetY).coerceIn(y0, mask.height)
+                val area = (x1 - x0) * (y1 - y0)
+                if (area <= 0) return@mapNotNull null
+                var selected = 0
+                for (y in y0 until y1) {
+                    val row = y * mask.width
+                    for (x in x0 until x1) {
+                        if (Color.alpha(pixels[row + x]) > 0) selected++
+                    }
+                }
+                selected.toFloat() / area.toFloat()
+            }
+            if (fractions.size != 2) floatArrayOf(0f, 0f, 0f)
+            else floatArrayOf(
+                ((fractions[0] + fractions[1]) / 2f).coerceIn(0f, 1f),
+                abs(fractions[0] - fractions[1]).coerceIn(0f, 1f),
+                1f
+            )
+        } catch (_: Exception) {
+            floatArrayOf(0f, 0f, 0f)
+        }
+    }
+
+    fun hasApprovedModel(context: Context): Boolean = loadModel(context) != null
+
     fun sourceLabel(context: Context): String =
         if (loadModel(context) != null) {
-            "已加载偏好模型。分数表示候选偏好得分，不是保证结果的概率，仍需顾客与纹绣师确认。"
+            "已启用经过独立顾客集校准、验证并完成人工审核的偏好估计模型。分数表示顾客给出 4–5 分评价的估计倾向，不代表客观审美或治疗效果保证。"
         } else {
-            "当前使用几何规则参考分，非训练后的 AI 概率。采集匿名偏好反馈并经验证后，可加载 brow_ranker.json。"
+            "当前使用几何规则参考分，并非 AI 概率。偏好模型只有经过独立校准、外部顾客验证和人工审核后才会启用。"
         }
 
-    fun rank(context: Context, points: List<PointF>): List<BrowRecommendation> {
-        val features = measurements(points)
+    fun rank(
+        context: Context,
+        points: List<PointF>,
+        segmentation: BrowSegmentationResult?,
+        maskReviewed: Boolean,
+        nativeShapeMode: Boolean
+    ): List<BrowRecommendation> {
+        val features = measurements(points, segmentation, maskReviewed, nativeShapeMode)
         val templates = listOf(
             BrowRecommendation("自然款", 82, BrowParams(1.0f, 1.0f, 0.92f, 0), "自然款：较保守的参数基线，仍需纹绣师确认"),
             BrowRecommendation("柔和款", 78, BrowParams(0.82f, 0.94f, 0.72f, 1), "柔和款：较低粗细与弧度的参数预设"),
@@ -2057,21 +2250,50 @@ private object BrowRecommendationEngine {
         )
         val model = loadModel(context)
         if (model != null) {
-            return templates.map { option ->
-                val x = floatArrayOf(
-                    features.widthHeightRatio,
-                    features.interocularFaceWidthRatio,
-                    features.jawFaceWidthRatio,
-                    features.browEyeDistanceRatio,
-                    features.browAsymmetryRatio,
-                    features.eyeLineTilt,
-                    option.params.thickness,
-                    option.params.length,
-                    option.params.arch,
-                    if (option.params.style == 1) 1f else 0f,
-                    if (option.params.style == 2) 1f else 0f
-                )
-                option.copy(score = (predict(model, x) * 100f).roundToInt().coerceIn(0, 100))
+            // Search a small, bounded parameter grid within each style family. This
+            // personalizes thickness, length and arch only through a reviewed model.
+            // Without a reviewed model the app does not pretend these are learned parameters.
+            val offsets = listOf(-0.12f, 0f, 0.12f)
+            return templates.map { family ->
+                val candidates = mutableListOf<BrowRecommendation>()
+                for (thicknessDelta in offsets) {
+                    for (lengthDelta in listOf(-0.06f, 0f, 0.06f)) {
+                        for (archDelta in offsets) {
+                            val candidateParams = family.params.copy(
+                                thickness = (family.params.thickness + thicknessDelta).coerceIn(0.55f, 1.45f),
+                                length = (family.params.length + lengthDelta).coerceIn(0.80f, 1.20f),
+                                arch = (family.params.arch + archDelta).coerceIn(0.55f, 1.45f)
+                            )
+                            val x = floatArrayOf(
+                                features.widthHeightRatio,
+                                features.interocularFaceWidthRatio,
+                                features.jawFaceWidthRatio,
+                                features.browEyeDistanceRatio,
+                                features.browAsymmetryRatio,
+                                features.eyeLineTilt,
+                                candidateParams.thickness,
+                                candidateParams.length,
+                                candidateParams.arch,
+                                if (candidateParams.style == 1) 1f else 0f,
+                                if (candidateParams.style == 2) 1f else 0f,
+                                features.nativeBrowAreaFraction,
+                                features.nativeBrowSideImbalance,
+                                features.nativeBrowMaskAvailable,
+                                features.nativeShapeMode
+                            )
+                            val preference = predict(model, x)
+                            candidates.add(
+                                family.copy(
+                                    name = "${family.name}·自适应",
+                                    score = (preference * 100f).roundToInt().coerceIn(0, 100),
+                                    params = candidateParams,
+                                    reason = "${family.name}：参数组合经已审核的顾客偏好模型排序，仍需顾客和纹绣师确认"
+                                )
+                            )
+                        }
+                    }
+                }
+                candidates.maxBy { it.score }
             }.sortedByDescending { it.score }
         }
         val shapeSignal = ((features.widthHeightRatio - 0.72f) / 0.18f).coerceIn(-1f, 1f)
@@ -2089,7 +2311,25 @@ private object BrowRecommendationEngine {
         return try {
             val json = context.assets.open("brow_ranker.json").bufferedReader(Charsets.UTF_8).use { it.readText() }
             val root = org.json.JSONObject(json)
-            if (root.optInt("model_version", -1) != 1) return null
+            // Only a model explicitly human-reviewed after independent calibration and
+            // external validation may provide percentages in the live app.
+            if (root.optInt("model_version", -1) != 3) return null
+            if (!root.optBoolean("release_approved", false)) return null
+            if (root.optString("calibration_status") != "platt_scaling") return null
+            val external = root.optJSONObject("external_validation") ?: return null
+            val gates = external.optJSONObject("release_gates") ?: return null
+            if (external.optInt("n_cases", 0) < 100 ||
+                external.optDouble("roc_auc", 0.0) < 0.60 ||
+                external.optDouble("brier_score", Double.POSITIVE_INFINITY) >=
+                    external.optDouble("prevalence_baseline_brier_score", 0.0) ||
+                external.optDouble("expected_calibration_error_10_bins", Double.POSITIVE_INFINITY) > 0.10 ||
+                !external.optBoolean("passed_release_gates", false) ||
+                !gates.optBoolean("external_cases_at_least_100", false) ||
+                !gates.optBoolean("roc_auc_at_least_0_60", false) ||
+                !gates.optBoolean("auc_ci_lower_above_chance", false) ||
+                !gates.optBoolean("auc_gain_over_rule_lower_ci_above_zero", false) ||
+                !gates.optBoolean("brier_better_than_prevalence_baseline", false) ||
+                !gates.optBoolean("ece_at_most_0_10", false)) return null
             val expectedFeatures = listOf(
                 "face_width_height_ratio",
                 "interocular_face_width_ratio",
@@ -2101,7 +2341,11 @@ private object BrowRecommendationEngine {
                 "length",
                 "arch",
                 "style_soft",
-                "style_defined"
+                "style_defined",
+                "native_brow_area_fraction",
+                "native_brow_side_imbalance",
+                "native_brow_mask_available",
+                "native_shape_mode"
             )
             val featureOrder = root.optJSONArray("feature_order") ?: return null
             if (featureOrder.length() != expectedFeatures.size) return null
@@ -2111,12 +2355,14 @@ private object BrowRecommendationEngine {
             val meansJson = root.getJSONArray("means")
             val scalesJson = root.getJSONArray("scales")
             val coefficientsJson = root.getJSONArray("coefficients")
-            if (meansJson.length() != 11 || scalesJson.length() != 11 || coefficientsJson.length() != 11) return null
+            if (meansJson.length() != 15 || scalesJson.length() != 15 || coefficientsJson.length() != 15) return null
             trainedModel = TrainedModel(
-                FloatArray(11) { meansJson.getDouble(it).toFloat() },
-                FloatArray(11) { scalesJson.getDouble(it).toFloat().let { scale -> if (abs(scale) < 1e-8f) 1f else scale } },
-                FloatArray(11) { coefficientsJson.getDouble(it).toFloat() },
-                root.getDouble("intercept").toFloat()
+                FloatArray(15) { meansJson.getDouble(it).toFloat() },
+                FloatArray(15) { scalesJson.getDouble(it).toFloat().let { scale -> if (abs(scale) < 1e-8f) 1f else scale } },
+                FloatArray(15) { coefficientsJson.getDouble(it).toFloat() },
+                root.getDouble("intercept").toFloat(),
+                root.getDouble("calibration_intercept").toFloat(),
+                root.getDouble("calibration_slope").toFloat()
             )
             trainedModel
         } catch (_: Exception) {
@@ -2131,7 +2377,10 @@ private object BrowRecommendationEngine {
             logit += model.coefficients[i] * scaled
         }
         val bounded = logit.coerceIn(-20f, 20f)
-        return (1f / (1f + kotlin.math.exp(-bounded)))
+        val calibratedLogit = (
+            model.calibrationIntercept + model.calibrationSlope * bounded
+        ).coerceIn(-20f, 20f)
+        return (1f / (1f + kotlin.math.exp(-calibratedLogit)))
     }
 
     private fun distance(a: PointF, b: PointF): Float =

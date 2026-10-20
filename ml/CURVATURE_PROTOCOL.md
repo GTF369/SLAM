@@ -33,7 +33,7 @@ python -m pip install -r ml/requirements.txt
 python ml/analyze_curvature.py /path/to/brow_curvature_calibration.csv --output curvature_summary.csv
 ```
 
-分析报告按部位输出测量数、独立匿名顾客数、系数均值/中位数、P10–P90、测量极值，以及先在顾客内平均后再做的 bootstrap 均值置信区间。P10–P90 是样本分布的描述性区间，不是未来顾客的保证范围。老版本 CSV 若缺少 case_id，无法可靠进行顾客层面的聚类分析，输出会警告这种限制。
+分析报告按部位输出原始测量数、独立匿名顾客数、先在每位顾客内部平均后的系数均值/中位数、顾客层面的 P10–P90 经验区间、顾客层面观察极值，以及先在顾客内平均后再做的 bootstrap 均值置信区间。P10–P90 是样本顾客分布的描述性区间，不是未来顾客的保证范围，也不是单个顾客曲率误差的预测区间。均值置信区间描述人群均值估计的不确定性，不能替代个体预测区间。老版本 CSV 若缺少 case_id，无法可靠进行顾客层面的聚类分析，输出会警告这种限制。
 
 ## 4. 建议的研究门槛
 

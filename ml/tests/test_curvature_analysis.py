@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from analyze_curvature import bootstrap_mean_ci, quantile
+from analyze_curvature import bootstrap_mean_ci, case_balanced_summaries, quantile
 
 
 class CurvatureAnalysisTests(unittest.TestCase):
@@ -20,6 +20,19 @@ class CurvatureAnalysisTests(unittest.TestCase):
         mean = sum(values) / len(values)
         self.assertLessEqual(low, mean)
         self.assertGreaterEqual(high, mean)
+
+    def test_repeated_measurements_do_not_overweight_one_case(self):
+        rows = [
+            ("A", 1.00, 20.0),
+            ("A", 1.00, 22.0),
+            ("A", 1.00, 21.0),
+            ("B", 1.20, 30.0),
+        ]
+        factor_cases, radius_cases = case_balanced_summaries(rows)
+        self.assertEqual(len(factor_cases), 2)
+        self.assertAlmostEqual(sum(factor_cases) / 2, 1.10)
+        self.assertEqual(len(radius_cases), 2)
+        self.assertAlmostEqual(sum(radius_cases) / 2, 25.5)
 
 
 if __name__ == "__main__":
