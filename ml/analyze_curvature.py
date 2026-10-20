@@ -41,13 +41,16 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("curvature_summary.csv"))
     args = parser.parse_args()
 
-    grouped: dict[str, list[float]] = defaultdict(list)
+    grouped: dict[str, list[tuple[str, float]]] = defaultdict(list)
+    legacy_without_case_id = False
     with args.csv.open("r", newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
         required = {"region", "arc_mm", "chord_mm", "correction_factor"}
         if not reader.fieldnames or not required.issubset(reader.fieldnames):
             raise SystemExit("Input must contain region, arc_mm, chord_mm, correction_factor columns.")
-        for row in reader:
+        has_case_id = "case_id" in (reader.fieldnames or [])
+        legacy_without_case_id = not has_case_id
+        for row_num, row in enumerate(reader, start=2):
             try:
                 arc = float(row["arc_mm"])
                 chord = float(row["chord_mm"])
@@ -56,42 +59,60 @@ def main() -> None:
                 continue
             if chord <= 0 or arc < chord or factor <= 0:
                 continue
+            case_id = row.get("case_id", "").strip() if has_case_id else ""
+            if not case_id:
+                # For legacy files without subject grouping, every row is treated as its own
+                # independent unit, and output explicitly warns that repeated measures cannot be clustered.
+                case_id = f"legacy-row-{row_num}"
             # Use recomputed ratios to guard against inconsistent stored factors.
-            grouped[row["region"].strip()].append(arc / chord)
+            grouped[row["region"].strip()].append((case_id, arc / chord))
 
     if not grouped:
         raise SystemExit("No valid curvature measurements found.")
 
     fields = [
-        "region", "n", "mean_factor", "median_factor", "p10_factor", "p90_factor",
-        "sample_min", "sample_max", "bootstrap_mean_ci95_low", "bootstrap_mean_ci95_high",
-        "interpretation"
+        "region", "n_measurements", "n_cases", "mean_measurement_factor", "median_factor",
+        "p10_factor", "p90_factor", "sample_min", "sample_max",
+        "bootstrap_case_mean_ci95_low", "bootstrap_case_mean_ci95_high", "interpretation"
     ]
     with args.output.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
-        for region, values in sorted(grouped.items()):
-            low, high = bootstrap_mean_ci(values, seed=2026 + len(region))
+        for region, rows in sorted(grouped.items()):
+            values = [value for _, value in rows]
+            case_values: dict[str, list[float]] = defaultdict(list)
+            for case_id, value in rows:
+                case_values[case_id].append(value)
+            # Average repeated measurements within each subject before resampling subjects.
+            case_means = [statistics.fmean(items) for items in case_values.values()]
+            low, high = bootstrap_mean_ci(case_means, seed=2026 + len(region))
             n = len(values)
+            n_cases = len(case_means)
+            warnings = []
+            if n_cases < 30:
+                warnings.append("insufficient distinct cases")
+            if legacy_without_case_id:
+                warnings.append("legacy file had no case_id, repeated measures could not be grouped")
+            warnings.append("descriptive only; independent validation required")
             writer.writerow({
                 "region": region,
-                "n": n,
-                "mean_factor": f"{statistics.fmean(values):.5f}",
+                "n_measurements": n,
+                "n_cases": n_cases,
+                "mean_measurement_factor": f"{statistics.fmean(values):.5f}",
                 "median_factor": f"{statistics.median(values):.5f}",
                 "p10_factor": f"{quantile(values, 0.10):.5f}",
                 "p90_factor": f"{quantile(values, 0.90):.5f}",
                 "sample_min": f"{min(values):.5f}",
                 "sample_max": f"{max(values):.5f}",
-                "bootstrap_mean_ci95_low": f"{low:.5f}",
-                "bootstrap_mean_ci95_high": f"{high:.5f}",
-                "interpretation": (
-                    "preliminary, insufficient sample" if n < 30
-                    else "descriptive sample interval, requires independent validation"
-                ),
+                "bootstrap_case_mean_ci95_low": f"{low:.5f}",
+                "bootstrap_case_mean_ci95_high": f"{high:.5f}",
+                "interpretation": "; ".join(warnings),
             })
     print(f"Wrote {args.output}")
-    print("P10–P90 are sample quantiles, not guaranteed anatomical limits. Bootstrap intervals describe uncertainty in the sample mean, not individual prediction bounds.")
-    print("Do not apply a region-level factor to clinical use until the measurement protocol and an independent validation study are complete.")
+    print("P10–P90 describe measurement rows. The bootstrap confidence interval resamples anonymous cases after averaging repeated measurements within each case.")
+    if legacy_without_case_id:
+        print("WARNING: input lacked case_id, so old rows were treated as distinct cases. Confidence intervals may be overconfident if a person has repeated records.")
+    print("These statistics are not guaranteed anatomical limits or individual prediction bounds. Do not apply a region-level factor clinically until measurement repeatability and independent validation are established.")
 
 
 if __name__ == "__main__":
