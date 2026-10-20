@@ -94,6 +94,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var plansRow: LinearLayout
     private lateinit var recommendationRow: LinearLayout
     private lateinit var recommendationLabel: TextView
+    private lateinit var segmentationLabel: TextView
+    private lateinit var segmentationSensitivitySeek: SeekBar
     private lateinit var pauseButton: Button
     private lateinit var thicknessSeek: SeekBar
     private lateinit var lengthSeek: SeekBar
@@ -105,7 +107,7 @@ class MainActivity : AppCompatActivity() {
     private var imageCapture: ImageCapture? = null
     private var imageExecutor: ExecutorService? = null
     private var captureInProgress = false
-    private var currentCaseId: String = UUID.randomUUID().toString()
+    private var currentCaseId: String = UUID.randomUUID().toString().take(8)
     private val lastTimestamp = AtomicLong(0L)
     private val cameraPermission = 701
     private var frameWidth = 640
@@ -116,6 +118,10 @@ class MainActivity : AppCompatActivity() {
     private val history = mutableListOf<BrowParams>()
     private val savedPlans = mutableListOf<BrowPlan>()
     private var transitionAnimator: ValueAnimator? = null
+    private var segmentationResult: BrowSegmentationResult? = null
+    private var showNativeSegmentation = false
+    private var segmentationSensitivity = 0.72f
+    private var segmentationGeneration = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -184,6 +190,44 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
         }
         designControls.addView(recommendationRow)
+        segmentationLabel = TextView(this).apply {
+            text = "原生眉区识别：尚未运行。当前模型会在本机处理照片。"
+            textSize = 11f
+            setTextColor(0xFFD3D8D0.toInt())
+            setPadding(dp(2), dp(6), dp(2), dp(4))
+        }
+        designControls.addView(segmentationLabel)
+        val segmentationRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        segmentationRow.addView(TextView(this).apply {
+            text = "识别灵敏度"
+            textSize = 12f
+            setTextColor(0xFFE9EAE4.toInt())
+        }, LinearLayout.LayoutParams(dp(82), -2))
+        segmentationSensitivitySeek = SeekBar(this).apply {
+            max = 100
+            progress = 72
+            progressTintList = android.content.res.ColorStateList.valueOf(0xFF78D8B6.toInt())
+            thumbTintList = android.content.res.ColorStateList.valueOf(0xFF78D8B6.toInt())
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) {
+                        segmentationSensitivity = 0.45f + progress / 100f * 0.47f
+                        if (showNativeSegmentation) runSegmentation()
+                    }
+                }
+            })
+        }
+        segmentationRow.addView(segmentationSensitivitySeek, LinearLayout.LayoutParams(0, dp(38), 1f))
+        designControls.addView(segmentationRow)
+        addButtonRow(designControls, listOf(
+            "识别原生眉区" to { toggleNativeSegmentation() },
+            "隐藏识别层" to { showNativeSegmentation = false; browView.setSegmentationResult(segmentationResult, false) }
+        ))
         thicknessSeek = addSlider(designControls, "粗细", 100, 50) { p ->
             params = params.copy(thickness = 0.55f + p / 100f * 0.90f)
             browView.setParams(params)
@@ -682,7 +726,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun enterDesignMode(photo: Bitmap, photoPoints: List<PointF>) {
         stopTransition()
-        currentCaseId = UUID.randomUUID().toString()
+        currentCaseId = UUID.randomUUID().toString().take(8)
+        segmentationGeneration++
+        segmentationResult?.overlay?.recycle()
+        segmentationResult = null
+        showNativeSegmentation = false
+        if (::segmentationLabel.isInitialized) segmentationLabel.text = "原生眉区识别：尚未运行"
         // Do not carry one customer's candidate plans into the next customer's session.
         savedPlans.clear()
         if (::plansRow.isInitialized) refreshPlanButtons()
@@ -710,6 +759,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun retakePhoto() {
         stopTransition()
+        segmentationGeneration++
+        segmentationResult?.overlay?.recycle()
+        segmentationResult = null
+        showNativeSegmentation = false
+        if (::segmentationLabel.isInitialized) segmentationLabel.text = "原生眉区识别：尚未运行"
+        browView.setSegmentationResult(null, false)
         designMode = false
         capturedPhoto?.recycle()
         capturedPhoto = null
@@ -1112,6 +1167,58 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun toggleNativeSegmentation() {
+        if (capturedPhoto == null) {
+            Toast.makeText(this, "请先拍照进入设计模式", Toast.LENGTH_SHORT).show()
+            return
+        }
+        showNativeSegmentation = true
+        val existing = segmentationResult
+        if (existing != null) {
+            browView.setSegmentationResult(existing, true)
+            segmentationLabel.text = "识别方式：${existing.method} · 参考置信度 ${(existing.confidence * 100).toInt()}% · 请检查识别边界"
+        } else {
+            runSegmentation()
+        }
+    }
+
+    private fun runSegmentation() {
+        val photo = capturedPhoto ?: return
+        val points = browView.facePoints()
+        if (points.size < 455) {
+            segmentationLabel.text = "关键点不足，不能生成眉区识别结果"
+            return
+        }
+        if (imageExecutor == null || imageExecutor?.isShutdown != false) {
+            imageExecutor = Executors.newSingleThreadExecutor()
+        }
+        val generation = ++segmentationGeneration
+        segmentationLabel.text = "正在识别原生眉区…"
+        imageExecutor?.execute {
+            val result = try {
+                BrowSegmentationEngine.segment(this, photo, points, segmentationSensitivity)
+            } catch (_: Exception) {
+                null
+            }
+            runOnUiThread {
+                if (generation != segmentationGeneration || capturedPhoto !== photo) {
+                    result?.overlay?.recycle()
+                    return@runOnUiThread
+                }
+                segmentationResult?.overlay?.recycle()
+                segmentationResult = result
+                if (result == null) {
+                    segmentationLabel.text = "识别失败，请调整光线或重新拍摄"
+                    browView.setSegmentationResult(null, false)
+                    showNativeSegmentation = false
+                } else {
+                    browView.setSegmentationResult(result, showNativeSegmentation)
+                    segmentationLabel.text = "识别方式：${result.method} · 参考置信度 ${(result.confidence * 100).toInt()}% · 识别像素 ${result.selectedPixelCount} · 请人工检查边界"
+                }
+            }
+        }
+    }
+
     private fun recordPreference() {
         val points = browView.facePoints()
         if (capturedPhoto == null || points.size < 455) {
@@ -1405,6 +1512,10 @@ class MainActivity : AppCompatActivity() {
         imageExecutor?.shutdown()
         imageExecutor = null
         imageCapture = null
+        segmentationGeneration++
+        segmentationResult?.overlay?.recycle()
+        segmentationResult = null
+        BrowSegmentationEngine.close()
         capturedPhoto?.recycle()
         capturedPhoto = null
         super.onDestroy()
@@ -1595,6 +1706,15 @@ private class BrowDesignView(context: Context) : View(context) {
 
     fun facePoints(): List<PointF> = points.map { PointF(it.x, it.y) }
 
+    private var segmentationResult: BrowSegmentationResult? = null
+    private var showSegmentation: Boolean = false
+
+    fun setSegmentationResult(result: BrowSegmentationResult?, visible: Boolean) {
+        segmentationResult = result
+        showSegmentation = visible
+        invalidate()
+    }
+
     fun setParams(newParams: BrowParams) {
         params = newParams
         invalidate()
@@ -1611,6 +1731,19 @@ private class BrowDesignView(context: Context) : View(context) {
             val top = (height - displayHeight) / 2f
             val destination = RectF(left, top, left + displayWidth, top + displayHeight)
             canvas.drawBitmap(image, null, destination, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+            val currentSegmentation = segmentationResult
+            if (showSegmentation && currentSegmentation != null && !currentSegmentation.overlay.isRecycled) {
+                val x0 = left + currentSegmentation.offsetX * scale
+                val y0 = top + currentSegmentation.offsetY * scale
+                val x1 = x0 + currentSegmentation.overlay.width * scale
+                val y1 = y0 + currentSegmentation.overlay.height * scale
+                canvas.drawBitmap(
+                    currentSegmentation.overlay,
+                    null,
+                    RectF(x0, y0, x1, y1),
+                    Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+                )
+            }
             val screenPoints = points.map { p ->
                 PointF(left + p.x * scale, top + p.y * scale)
             }
