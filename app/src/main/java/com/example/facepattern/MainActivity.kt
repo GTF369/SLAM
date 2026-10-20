@@ -11,6 +11,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
@@ -140,13 +141,24 @@ class MainActivity : AppCompatActivity() {
 
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(10), dp(12), dp(12))
-            setBackgroundColor(Color.argb(232, 18, 20, 25))
+            setPadding(dp(14), dp(12), dp(14), dp(14))
+            background = GradientDrawable().apply {
+                setColor(0xEC171A20.toInt())
+                cornerRadius = dp(22).toFloat()
+                setStroke(dp(1), 0x32FFFFFF)
+            }
         }
+        panel.addView(TextView(this).apply {
+            text = "眉形设计助手"
+            textSize = 18f
+            setTextColor(0xFFF3F0E7.toInt())
+            typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+            setPadding(dp(2), 0, dp(2), dp(2))
+        })
         status = TextView(this).apply {
             text = "正在启动摄像头，请正对镜头并保持光线充足"
-            textSize = 13f
-            setTextColor(Color.WHITE)
+            textSize = 12f
+            setTextColor(0xFFD3D8D0.toInt())
             setPadding(dp(2), dp(2), dp(2), dp(8))
         }
         panel.addView(status)
@@ -223,9 +235,19 @@ class MainActivity : AppCompatActivity() {
 
         val scroll = ScrollView(this).apply {
             isFillViewport = false
+            clipToPadding = false
+            setPadding(dp(6), dp(4), dp(6), dp(6))
+            background = GradientDrawable().apply {
+                setColor(Color.TRANSPARENT)
+                cornerRadius = dp(24).toFloat()
+            }
             addView(panel)
         }
-        root.addView(scroll, FrameLayout.LayoutParams(-1, dp(345), Gravity.BOTTOM))
+        root.addView(scroll, FrameLayout.LayoutParams(-1, dp(370), Gravity.BOTTOM).apply {
+            leftMargin = dp(8)
+            rightMargin = dp(8)
+            bottomMargin = dp(8)
+        })
         setContentView(root)
     }
 
@@ -244,11 +266,20 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
         }
         items.forEach { (label, action) ->
+            val isPrimary = label in setOf("拍照设计", "保存方案", "保存效果图", "1:1 打印", "生成打印模板")
             val button = Button(this).apply {
                 text = label
                 textSize = 12f
+                isAllCaps = false
                 minHeight = dp(42)
-                setPadding(dp(3), 0, dp(3), 0)
+                setPadding(dp(4), 0, dp(4), 0)
+                setTextColor(if (isPrimary) 0xFF1B201A.toInt() else 0xFFE9EAE4.toInt())
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(13).toFloat()
+                    setColor(if (isPrimary) 0xFFD5DDBF.toInt() else 0xFF30343D.toInt())
+                    if (!isPrimary) setStroke(dp(1), 0x30FFFFFF)
+                }
+                stateListAnimator = null
                 setOnClickListener { action() }
             }
             row.addView(button, LinearLayout.LayoutParams(0, dp(44), 1f).apply {
@@ -272,6 +303,8 @@ class MainActivity : AppCompatActivity() {
         row.addView(label, LinearLayout.LayoutParams(dp(42), -2))
         val seek = SeekBar(this).apply {
             max = maxValue
+            progressTintList = android.content.res.ColorStateList.valueOf(0xFFD5DDBF.toInt())
+            thumbTintList = android.content.res.ColorStateList.valueOf(0xFFD5DDBF.toInt())
             progress = initial
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onStartTrackingTouch(seekBar: SeekBar?) {
