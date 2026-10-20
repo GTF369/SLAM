@@ -21,7 +21,11 @@ from sklearn.preprocessing import StandardScaler
 
 FEATURE_NAMES = [
     "face_width_height_ratio",
+    "interocular_face_width_ratio",
+    "jaw_face_width_ratio",
+    "brow_eye_distance_ratio",
     "brow_asymmetry_ratio",
+    "eye_line_tilt",
     "thickness",
     "length",
     "arch",
@@ -30,7 +34,8 @@ FEATURE_NAMES = [
 ]
 REQUIRED = {
     "case_id", "style", "thickness", "length", "arch",
-    "rating", "face_width_height_ratio", "brow_asymmetry_ratio",
+    "rating", "face_width_height_ratio", "interocular_face_width_ratio",
+    "jaw_face_width_ratio", "brow_eye_distance_ratio", "brow_asymmetry_ratio", "eye_line_tilt",
 }
 
 
@@ -62,12 +67,19 @@ def build_matrix(rows: list[dict[str, Any]]) -> tuple[np.ndarray, np.ndarray, np
             arch = float(row["arch"])
             rating = int(float(row["rating"]))
             face_ratio = float(row["face_width_height_ratio"])
+            interocular_ratio = float(row["interocular_face_width_ratio"])
+            jaw_ratio = float(row["jaw_face_width_ratio"])
+            brow_eye_ratio = float(row["brow_eye_distance_ratio"])
             asymmetry = float(row["brow_asymmetry_ratio"])
+            eye_tilt = float(row["eye_line_tilt"])
         except (TypeError, ValueError) as exc:
             raise ValueError(f"Row {row_num} has an invalid numeric feature.") from exc
-        values = [face_ratio, asymmetry, thickness, length, arch,
-                  1.0 if style == "soft" else 0.0,
-                  1.0 if style == "defined" else 0.0]
+        values = [
+            face_ratio, interocular_ratio, jaw_ratio, brow_eye_ratio, asymmetry, eye_tilt,
+            thickness, length, arch,
+            1.0 if style == "soft" else 0.0,
+            1.0 if style == "defined" else 0.0,
+        ]
         if not all(math.isfinite(v) for v in values):
             raise ValueError(f"Row {row_num} contains NaN or infinite feature values.")
         if rating < 1 or rating > 5:
