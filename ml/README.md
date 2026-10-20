@@ -32,7 +32,7 @@ Collect observations from multiple distinct customers, then run:
 python ml/train_brow_ranker.py /path/to/brow_preference_feedback.csv
 ```
 
-The script rejects fewer than 30 distinct cases, keeps each `case_id` exclusively in either train or test, standardizes features using the training fold only, reports grouped holdout metrics, and writes `app/src/main/assets/brow_ranker.json`. Copy/commit that JSON into the Android source tree and rebuild to enable local model inference. If the model file is absent or invalid, the app uses the explicit geometry heuristic fallback.
+The script rejects fewer than 30 distinct cases and keeps each `case_id` exclusively in either train or test. It standardizes features on the training fold only for the grouped 80/20 holdout assessment, reports holdout metrics, then refits the deployable candidate using all available consented cases and writes `app/src/main/assets/brow_ranker.json`. The reported holdout metrics describe the assessment model, not the final all-data fit. Copy/commit the JSON into the Android source tree and rebuild to enable local model inference. If the model file is absent or invalid, the app uses the explicit geometry heuristic fallback. A prospective independent set is still needed before relying on the model in client work.
 
 Model input feature order is fixed and must remain aligned between Python and Kotlin:
 
@@ -97,10 +97,10 @@ python ml/train_brow_segmentation.py --dataset /local/brow_dataset --output ml/a
 By default the output is a candidate model and is **not** copied into the Android app. After reviewing masks and holdout examples, an initial internal screening step can be run with:
 
 ```bash
-python ml/train_brow_segmentation.py --dataset /local/brow_dataset --output ml/artifacts/brow_segmentation_candidate.tflite --metrics ml/brow_segmentation_metrics.json --promote-to-app --min-validation-dice 0.70
+python ml/train_brow_segmentation.py --dataset /local/brow_dataset --output ml/artifacts/brow_segmentation_candidate.tflite --metrics ml/brow_segmentation_metrics.json --promote-to-app --min-test-dice 0.70
 ```
 
-The second command only copies the model to app assets if the grouped holdout Dice is at least 0.70. Passing that internal gate still does not mean the model is commercially validated. The training script uses a compact U-Net, binary-cross-entropy plus Dice loss, aligned paired augmentations, and a case-grouped holdout. It refuses to train fewer than 50 distinct cases by default. This is only an initial exploratory floor, not a sufficient commercial sample-size claim. Review the mask quality, Dice/IoU, false-positive and false-negative examples before committing a model. Validate on independent clients, skin tones, makeup, lighting and camera conditions and then on the target Android device.
+The second command only copies the model to app assets if the untouched grouped test Dice is at least 0.70. The model-selection validation split is separate from this test split, so the final test cases are not used for early stopping. Passing this internal gate still does not mean the model is commercially validated. The training script uses a compact U-Net, binary-cross-entropy plus Dice loss, aligned paired augmentations, and three case-grouped partitions for training, early-stopping validation and final internal testing. It refuses to train fewer than 50 distinct cases by default. This is only an initial exploratory floor, not a sufficient commercial sample-size claim. Review the masks and test examples, including false positives and false negatives, before committing a model. Validate on independently collected clients, skin tones, makeup, lighting and camera conditions and then on the target Android device.
 
 No trained brow-segmentation model is shipped in this repository because no authorized, professionally annotated dataset was supplied. The application therefore uses the adaptive pre-segmentation fallback until a compatible trained model is added.
 
