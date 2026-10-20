@@ -541,11 +541,47 @@ class MainActivity : AppCompatActivity() {
 
     private fun captureForDesign() {
         if (captureInProgress) return
+        val anonymousCode = EditText(this).apply {
+            hint = "匿名顾客代码，同一顾客重复到店请沿用"
+            setSingleLine(true)
+            setText(currentCaseId)
+        }
+        val consentText = TextView(this).apply {
+            text = "请先向顾客说明并取得同意。照片会在本机内存中用于眉形设计，当前原型不会上传照片。保存效果图或导出原始标注照片会将含人脸的图片写入相册。偏好评分和曲率数据使用下方同一匿名代码保存在本机，取得相应授权后可导出作算法研究。"
+            textSize = 13f
+            setPadding(dp(20), dp(4), dp(20), dp(8))
+        }
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(consentText)
+            addView(anonymousCode, LinearLayout.LayoutParams(-1, -2).apply {
+                setMargins(dp(20), dp(2), dp(20), dp(2))
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "新顾客可使用新的随机代码。同一顾客跨次测量需由纹绣师在合规的本地记录中沿用同一个匿名代码，不要输入姓名、电话或预约号。"
+                textSize = 11f
+                setPadding(dp(20), dp(4), dp(20), dp(8))
+            })
+        }
         AlertDialog.Builder(this)
             .setTitle("顾客拍摄与数据使用确认")
-            .setMessage("请先向顾客说明并取得同意。照片会在本机内存中用于眉形设计，当前原型不会上传照片。点击“保存效果图”会将包含面部的设计图写入手机相册。满意度、方案偏好和曲率数据会以匿名编号保存在本机，并可在取得同意后导出用于算法研究，不会自动上传。")
+            .setView(form)
             .setNegativeButton("取消", null)
-            .setPositiveButton("同意并拍照") { _, _ -> captureHighResolutionPhoto() }
+            .setNeutralButton("随机新代码") { _, _ ->
+                currentCaseId = UUID.randomUUID().toString().take(8)
+                Toast.makeText(this, "已生成新的匿名代码：$currentCaseId，请再次点击拍照设计", Toast.LENGTH_LONG).show()
+            }
+            .setPositiveButton("同意并拍照") { _, _ ->
+                val safeCode = anonymousCode.text.toString().trim()
+                    .filter { it.isLetterOrDigit() || it == '_' || it == '-' }
+                    .take(32)
+                if (safeCode.isBlank()) {
+                    Toast.makeText(this, "请输入匿名代码或先生成随机代码", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                currentCaseId = safeCode
+                captureHighResolutionPhoto()
+            }
             .show()
     }
 
@@ -778,7 +814,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun enterDesignMode(photo: Bitmap, photoPoints: List<PointF>) {
         stopTransition()
-        currentCaseId = UUID.randomUUID().toString().take(8)
         segmentationGeneration++
         savedPlans.forEach { it.segmentationSnapshot?.overlay?.recycle() }
         savedPlans.clear()
@@ -1372,9 +1407,10 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val anonymousClientCode = EditText(this).apply {
-            hint = "匿名顾客代码（同一顾客多次设计请沿用）"
-            setSingleLine(true)
+            hint = "本次匿名顾客代码"
+            isSingleLine = true
             setText(currentCaseId)
+            isEnabled = false
         }
         val ratingLabel = TextView(this).apply {
             text = "顾客满意度：5 / 5"
