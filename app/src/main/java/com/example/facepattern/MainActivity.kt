@@ -4,6 +4,7 @@ import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.app.AlertDialog
+import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -17,13 +18,16 @@ import android.graphics.Path
 import android.graphics.PointF
 import android.graphics.RectF
 import android.graphics.Shader
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.CancellationSignal
 import android.os.ParcelFileDescriptor
 import android.print.PageRange
 import android.print.PrintAttributes
 import android.print.PrintDocumentAdapter
 import android.print.PrintDocumentInfo
+import android.provider.MediaStore
 import android.print.PrintManager
 import android.print.pdf.PrintedPdfDocument
 import android.text.InputType
@@ -43,15 +47,19 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.exifinterface.media.ExifInterface
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
+import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -86,6 +94,9 @@ class MainActivity : AppCompatActivity() {
     private var landmarker: FaceLandmarker? = null
     private var cameraExecutor: ExecutorService? = null
     private var cameraProvider: ProcessCameraProvider? = null
+    private var imageCapture: ImageCapture? = null
+    private var imageExecutor: ExecutorService? = null
+    private var captureInProgress = false
     private val lastTimestamp = AtomicLong(0L)
     private val cameraPermission = 701
     private var frameWidth = 640
@@ -175,7 +186,11 @@ class MainActivity : AppCompatActivity() {
         designControls.addView(plansRow)
         addButtonRow(designControls, listOf(
             "方案对比" to { showComparison() },
-            "1:1 打印" to { askPrintCalibration() },
+            "保存效果图" to { savePreviewToGallery() },
+            "1:1 打印" to { askPrintCalibration() }
+        ))
+        addButtonRow(designControls, listOf(
+            "曲率标定" to { showCurvatureCalibration() },
             "重新拍摄" to { retakePhoto() }
         ))
         val note = TextView(this).apply {
@@ -276,6 +291,11 @@ class MainActivity : AppCompatActivity() {
                     val provider = providerFuture.get()
                     cameraProvider = provider
                     val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
+                    val stillCapture = ImageCapture.Builder()
+                        .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                        .setTargetRotation(previewView.display?.rotation ?: android.view.Surface.ROTATION_0)
+                        .build()
+                    imageCapture = stillCapture
                     val analysis = ImageAnalysis.Builder()
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
@@ -323,7 +343,7 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                     provider.unbindAll()
-                    provider.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, preview, analysis)
+                    provider.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, preview, analysis, stillCapture)
                     status.text = "摄像头已启动，请将脸放在画面中央"
                 } catch (e: Exception) {
                     status.text = "摄像头启动失败，请检查权限后重试"
@@ -368,21 +388,132 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun captureForDesign() {
-        val points = browView.facePoints()
-        if (points.size < 400) {
+        if (captureInProgress) return
+        val livePoints = browView.facePoints()
+        if (livePoints.size < 400) {
             Toast.makeText(this, "尚未稳定识别人脸，请正视镜头后再拍照", Toast.LENGTH_SHORT).show()
             return
         }
-        val bitmap = previewView.bitmap
-        if (bitmap == null) {
-            Toast.makeText(this, "拍照失败，请重新尝试", Toast.LENGTH_SHORT).show()
+        val stillCapture = imageCapture
+        if (stillCapture == null) {
+            Toast.makeText(this, "相机尚未准备好，请稍后重试", Toast.LENGTH_SHORT).show()
             return
         }
+        captureInProgress = true
+        status.text = "正在拍摄高分辨率照片并校验人脸关键点…"
+        val file = File(cacheDir, "brow_capture_${System.currentTimeMillis()}.jpg")
+        val output = ImageCapture.OutputFileOptions.Builder(file).build()
+        stillCapture.takePicture(
+            output,
+            ContextCompat.getMainExecutor(this),
+            object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                    if (imageExecutor == null || imageExecutor?.isShutdown != false) {
+                        imageExecutor = Executors.newSingleThreadExecutor()
+                    }
+                    imageExecutor?.execute {
+                        var bitmap: Bitmap? = null
+                        var points: List<PointF> = emptyList()
+                        var failure: String? = null
+                        var detector: FaceLandmarker? = null
+                        var mpImage: com.google.mediapipe.framework.image.MPImage? = null
+                        try {
+                            bitmap = decodeCapturedPhoto(file)
+                            if (bitmap == null) {
+                                failure = "无法读取拍摄照片"
+                            } else {
+                                detector = FaceLandmarker.createFromOptions(
+                                    this@MainActivity,
+                                    FaceLandmarker.FaceLandmarkerOptions.builder()
+                                        .setBaseOptions(BaseOptions.builder().setModelAssetPath("face_landmarker.task").build())
+                                        .setRunningMode(RunningMode.IMAGE)
+                                        .setNumFaces(1)
+                                        .build()
+                                )
+                                mpImage = BitmapImageBuilder(bitmap).build()
+                                val result = detector.detect(mpImage)
+                                points = result.faceLandmarks().firstOrNull()?.map {
+                                    PointF(it.x() * bitmap!!.width, it.y() * bitmap!!.height)
+                                } ?: emptyList()
+                                if (points.size < 400) failure = "照片中的人脸关键点不足，请正视镜头并保持眉眼无遮挡"
+                            }
+                        } catch (e: Exception) {
+                            failure = "照片分析失败：" + (e.message ?: "请调整姿势后重试")
+                        } finally {
+                            try { mpImage?.close() } catch (_: Exception) {}
+                            try { detector?.close() } catch (_: Exception) {}
+                            file.delete()
+                        }
+                        runOnUiThread {
+                            captureInProgress = false
+                            val photo = bitmap
+                            if (failure != null || photo == null) {
+                                photo?.recycle()
+                                status.text = failure ?: "拍摄失败，请重试"
+                                Toast.makeText(this@MainActivity, status.text, Toast.LENGTH_LONG).show()
+                            } else {
+                                enterDesignMode(photo, points)
+                            }
+                        }
+                    } ?: run {
+                        captureInProgress = false
+                        file.delete()
+                        Toast.makeText(this@MainActivity, "照片分析线程不可用，请重试", Toast.LENGTH_LONG).show()
+                    }
+                }
+
+                override fun onError(exception: ImageCaptureException) {
+                    captureInProgress = false
+                    file.delete()
+                    status.text = "拍照失败：" + (exception.message ?: "请重试")
+                    Toast.makeText(this@MainActivity, status.text, Toast.LENGTH_LONG).show()
+                }
+            }
+        )
+    }
+
+    private fun decodeCapturedPhoto(file: File): Bitmap? {
+        val decoded = BitmapFactory.decodeFile(file.absolutePath) ?: return null
+        val exif = try { ExifInterface(file.absolutePath) } catch (_: Exception) { null }
+        val orientation = exif?.getAttributeInt(
+            ExifInterface.TAG_ORIENTATION,
+            ExifInterface.ORIENTATION_NORMAL
+        ) ?: ExifInterface.ORIENTATION_NORMAL
+        val transform = Matrix()
+        when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> transform.postRotate(90f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> transform.postRotate(180f)
+            ExifInterface.ORIENTATION_ROTATE_270 -> transform.postRotate(270f)
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> transform.postScale(-1f, 1f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> transform.postScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> {
+                transform.postRotate(90f)
+                transform.postScale(-1f, 1f)
+            }
+            ExifInterface.ORIENTATION_TRANSVERSE -> {
+                transform.postRotate(270f)
+                transform.postScale(-1f, 1f)
+            }
+        }
+        val oriented = if (orientation == ExifInterface.ORIENTATION_NORMAL) decoded else {
+            Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, transform, true).also {
+                if (it !== decoded) decoded.recycle()
+            }
+        }
+        // Match the front-camera mirror shown to the customer and the design overlay.
+        val mirror = Matrix().apply { postScale(-1f, 1f, oriented.width / 2f, oriented.height / 2f) }
+        return Bitmap.createBitmap(oriented, 0, 0, oriented.width, oriented.height, mirror, true).also {
+            if (it !== oriented) oriented.recycle()
+        }
+    }
+
+    private fun enterDesignMode(photo: Bitmap, photoPoints: List<PointF>) {
+        stopTransition()
         capturedPhoto?.recycle()
-        capturedPhoto = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+        capturedPhoto = photo
         designMode = true
-        browView.setPhoto(capturedPhoto)
-        browView.setFacePoints(points)
+        browView.setPhoto(photo)
+        browView.setFacePoints(photoPoints)
         previewView.visibility = View.GONE
         designControls.visibility = View.VISIBLE
         liveControls.visibility = View.GONE
@@ -390,12 +521,13 @@ class MainActivity : AppCompatActivity() {
         history.clear()
         browView.setParams(params)
         syncSliders()
-        status.text = "已冻结照片，可选眉形并调整粗细、长度和弧度"
         cameraProvider?.unbindAll()
+        imageCapture = null
         landmarker?.close()
         landmarker = null
         cameraExecutor?.shutdown()
         cameraExecutor = null
+        status.text = "高分辨率照片已分析，可调整眉形并保存多个方案"
     }
 
     private fun retakePhoto() {
@@ -601,6 +733,171 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun savePreviewToGallery() {
+        val photo = capturedPhoto
+        if (photo == null) {
+            Toast.makeText(this, "请先拍摄并设计眉形", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val preview = try {
+            BrowRenderer.renderPreview(photo, browView.facePoints(), params, photo.width)
+        } catch (e: Exception) {
+            Toast.makeText(this, "生成效果图失败：" + (e.message ?: "请重试"), Toast.LENGTH_LONG).show()
+            return
+        }
+        val filename = "眉形方案_${System.currentTimeMillis()}.png"
+        var output: java.io.OutputStream? = null
+        var uri: android.net.Uri? = null
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, filename)
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                    put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/BrowDesign")
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+                uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                if (uri == null) throw IllegalStateException("无法创建图片文件")
+                output = contentResolver.openOutputStream(uri) ?: throw IllegalStateException("无法写入图片文件")
+                if (!preview.compress(Bitmap.CompressFormat.PNG, 100, output)) throw IllegalStateException("图片编码失败")
+                output.close()
+                output = null
+                values.clear()
+                values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                contentResolver.update(uri, values, null, null)
+                Toast.makeText(this, "效果图已保存到相册的 Pictures/BrowDesign", Toast.LENGTH_LONG).show()
+            } else {
+                val directory = File(getExternalFilesDir(Environment.DIRECTORY_PICTURES), "BrowDesign")
+                if (!directory.exists() && !directory.mkdirs()) throw IllegalStateException("无法创建保存目录")
+                val file = File(directory, filename)
+                FileOutputStream(file).use { stream ->
+                    if (!preview.compress(Bitmap.CompressFormat.PNG, 100, stream)) throw IllegalStateException("图片编码失败")
+                }
+                Toast.makeText(this, "效果图已保存到应用图片目录：" + file.absolutePath, Toast.LENGTH_LONG).show()
+            }
+        } catch (e: Exception) {
+            if (uri != null) contentResolver.delete(uri, null, null)
+            Toast.makeText(this, "保存失败：" + (e.message ?: "请重试"), Toast.LENGTH_LONG).show()
+        } finally {
+            try { output?.close() } catch (_: Exception) {}
+            preview.recycle()
+        }
+    }
+
+    private fun showCurvatureCalibration() {
+        val field = EditText(this).apply {
+            hint = "表面弧长实测值（毫米）"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        val chord = EditText(this).apply {
+            hint = "同一段两端直线距离（毫米）"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        val region = android.widget.Spinner(this).apply {
+            adapter = android.widget.ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                listOf("左眉头", "左眉身", "左眉峰", "左眉尾", "右眉头", "右眉身", "右眉峰", "右眉尾")
+            )
+        }
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(8), dp(18), 0)
+            addView(TextView(this@MainActivity).apply {
+                text = "用于建立个体和区域的实测曲率数据。用柔性尺测量皮肤表面弧长，同时记录同一段两端的直线距离。不要用照片像素代替实测毫米。"
+                textSize = 13f
+            })
+            addView(region)
+            addView(chord)
+            addView(field)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("眉弓曲率标定记录")
+            .setView(form)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("计算并保存") { _, _ ->
+                val arcMm = field.text.toString().toFloatOrNull()
+                val chordMm = chord.text.toString().toFloatOrNull()
+                if (arcMm == null || chordMm == null || chordMm <= 0f || arcMm < chordMm || arcMm > chordMm * 2f) {
+                    Toast.makeText(this, "请检查实测值。弧长应不小于直线距离，且数值需合理", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                val factor = arcMm / chordMm
+                val prefs = getSharedPreferences("brow_curvature_samples", Context.MODE_PRIVATE)
+                val old = org.json.JSONArray(prefs.getString("records", "[]"))
+                val item = org.json.JSONObject().apply {
+                    put("region", region.selectedItem.toString())
+                    put("arc_mm", arcMm.toDouble())
+                    put("chord_mm", chordMm.toDouble())
+                    put("factor", factor.toDouble())
+                    put("timestamp", System.currentTimeMillis())
+                }
+                old.put(item)
+                prefs.edit().putString("records", old.toString()).apply()
+                val samples = (0 until old.length()).mapNotNull { index ->
+                    old.optJSONObject(index)?.takeIf { it.optString("region") == region.selectedItem.toString() }
+                        ?.optDouble("factor")?.takeIf { it.isFinite() }
+                }
+                val interval = if (samples.size >= 5) {
+                    val sorted = samples.sorted()
+                    val low = sorted[((sorted.size - 1) * 0.10).toInt()]
+                    val high = sorted[((sorted.size - 1) * 0.90).toInt()]
+                    "该区域已有 ${samples.size} 条记录，样本 10%–90% 分位区间约为 ${"%.3f".format(low)}–${"%.3f".format(high)}。这只是本机样本的经验区间，不代表人群通用区间。"
+                } else {
+                    "该区域已记录 ${samples.size} 条样本。建议至少采集 30–50 个不同顾客的标准化记录，再评估区间稳定性。"
+                }
+                Toast.makeText(this, "实测修正系数 k = ${"%.3f".format(factor)}。\n" + interval, Toast.LENGTH_LONG).show()
+            }
+            .setNeutralButton("导出 CSV") { _, _ -> exportCurvatureCsv() }
+            .show()
+    }
+
+    private fun exportCurvatureCsv() {
+        val records = org.json.JSONArray(getSharedPreferences("brow_curvature_samples", Context.MODE_PRIVATE).getString("records", "[]"))
+        if (records.length() == 0) {
+            Toast.makeText(this, "暂时没有曲率标定记录", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val csv = buildString {
+            append("region,arc_mm,chord_mm,correction_factor,timestamp\n")
+            for (i in 0 until records.length()) {
+                val row = records.optJSONObject(i) ?: continue
+                append(row.optString("region")).append(',')
+                append(row.optDouble("arc_mm")).append(',')
+                append(row.optDouble("chord_mm")).append(',')
+                append(row.optDouble("factor")).append(',')
+                append(row.optLong("timestamp")).append('\n')
+            }
+        }
+        val filename = "brow_curvature_calibration_${System.currentTimeMillis()}.csv"
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, filename)
+                    put(MediaStore.Downloads.MIME_TYPE, "text/csv")
+                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/BrowDesign")
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: throw IllegalStateException("无法创建 CSV 文件")
+                contentResolver.openOutputStream(uri)?.use { it.write(csv.toByteArray(Charsets.UTF_8)) }
+                    ?: throw IllegalStateException("无法写入 CSV")
+                values.clear()
+                values.put(MediaStore.Downloads.IS_PENDING, 0)
+                contentResolver.update(uri, values, null, null)
+                Toast.makeText(this, "曲率数据已导出到 Downloads/BrowDesign", Toast.LENGTH_LONG).show()
+            } else {
+                val directory = File(getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "BrowDesign")
+                if (!directory.exists()) directory.mkdirs()
+                val file = File(directory, filename)
+                file.writeText(csv, Charsets.UTF_8)
+                Toast.makeText(this, "曲率数据已导出：" + file.absolutePath, Toast.LENGTH_LONG).show()
+            }
+        } catch (e: Exception) {
+            Toast.makeText(this, "导出失败：" + (e.message ?: "请重试"), Toast.LENGTH_LONG).show()
+        }
+    }
+
     private fun askPrintCalibration() {
         val points = browView.facePoints()
         if (points.size < 470 || capturedPhoto == null) {
@@ -741,6 +1038,9 @@ class MainActivity : AppCompatActivity() {
         landmarker = null
         cameraExecutor?.shutdown()
         cameraExecutor = null
+        imageExecutor?.shutdown()
+        imageExecutor = null
+        imageCapture = null
         capturedPhoto?.recycle()
         capturedPhoto = null
         super.onDestroy()
@@ -784,9 +1084,20 @@ private class BrowDesignView(context: Context) : View(context) {
         super.onDraw(canvas)
         val image = photo
         if (image != null && !image.isRecycled) {
-            canvas.drawBitmap(image, null, RectF(0f, 0f, width.toFloat(), height.toFloat()), Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+            val scale = max(width.toFloat() / image.width.coerceAtLeast(1), height.toFloat() / image.height.coerceAtLeast(1))
+            val displayWidth = image.width * scale
+            val displayHeight = image.height * scale
+            val left = (width - displayWidth) / 2f
+            val top = (height - displayHeight) / 2f
+            val destination = RectF(left, top, left + displayWidth, top + displayHeight)
+            canvas.drawBitmap(image, null, destination, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+            val screenPoints = points.map { p ->
+                PointF(left + p.x * scale, top + p.y * scale)
+            }
+            BrowRenderer.drawBrows(canvas, screenPoints, params)
+        } else {
+            BrowRenderer.drawBrows(canvas, points, params)
         }
-        BrowRenderer.drawBrows(canvas, points, params)
     }
 }
 
