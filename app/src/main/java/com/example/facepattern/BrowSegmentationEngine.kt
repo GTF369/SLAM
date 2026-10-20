@@ -42,26 +42,27 @@ internal object BrowSegmentationEngine {
     private fun loadModel(context: Context): Interpreter? {
         if (modelAttempted) return model
         modelAttempted = true
-        return try {
+        try {
             val assets = context.assets.list("")?.toSet().orEmpty()
             if ("brow_segmentation.tflite" !in assets) return null
             val bytes = context.assets.open("brow_segmentation.tflite").use { it.readBytes() }
             val mapped = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder())
             mapped.put(bytes)
             mapped.rewind()
-            model = Interpreter(mapped, Interpreter.Options().setNumThreads(2))
-            val input = model!!.getInputTensor(0).shape()
-            val output = model!!.getOutputTensor(0).shape()
-            if (input.contentEquals(intArrayOf(1, MODEL_SIZE, MODEL_SIZE, 3)).not() ||
-                output.contentEquals(intArrayOf(1, MODEL_SIZE, MODEL_SIZE, 1)).not()) {
-                model!!.close()
-                model = null
+            val candidate = Interpreter(mapped, Interpreter.Options().setNumThreads(2))
+            val input = candidate.getInputTensor(0).shape()
+            val output = candidate.getOutputTensor(0).shape()
+            if (!input.contentEquals(intArrayOf(1, MODEL_SIZE, MODEL_SIZE, 3)) ||
+                !output.contentEquals(intArrayOf(1, MODEL_SIZE, MODEL_SIZE, 1))) {
+                candidate.close()
+                return null
             }
-            model
+            model = candidate
         } catch (_: Exception) {
             try { model?.close() } catch (_: Exception) {}
             model = null
         }
+        return model
     }
 
     fun segment(
