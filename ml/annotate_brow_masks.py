@@ -147,7 +147,17 @@ def main() -> None:
     (args.output / "images").mkdir(exist_ok=True)
     (args.output / "masks").mkdir(exist_ok=True)
     manifest_path = args.output / "manifest.csv"
-    write_header = not manifest_path.exists()
+    write_header = not manifest_path.exists() or manifest_path.stat().st_size == 0
+    existing_images: set[str] = set()
+    existing_masks: set[str] = set()
+    if manifest_path.exists() and manifest_path.stat().st_size > 0:
+        with manifest_path.open("r", newline="", encoding="utf-8-sig") as existing_handle:
+            existing_reader = csv.DictReader(existing_handle)
+            if not existing_reader.fieldnames or not {"image", "mask", "case_id"}.issubset(existing_reader.fieldnames):
+                raise SystemExit("Existing manifest.csv has an invalid header. Back it up and create a new output directory.")
+            for existing_row in existing_reader:
+                existing_images.add(existing_row.get("image", ""))
+                existing_masks.add(existing_row.get("mask", ""))
     roi_counts: dict[str, int] = {}
     try:
         with manifest_path.open("a", newline="", encoding="utf-8") as handle:
@@ -175,10 +185,21 @@ def main() -> None:
                     if mask is None:
                         continue
                     number = roi_counts.get(case_id, 0) + 1
+                    while True:
+                        stem = f"{case_id}_{path.stem}_roi{number:02d}"
+                        image_name = f"images/{stem}.png"
+                        mask_name = f"masks/{stem}.png"
+                        if (
+                            image_name not in existing_images
+                            and mask_name not in existing_masks
+                            and not (args.output / image_name).exists()
+                            and not (args.output / mask_name).exists()
+                        ):
+                            break
+                        number += 1
                     roi_counts[case_id] = number
-                    stem = f"{case_id}_{path.stem}_roi{number:02d}"
-                    image_name = f"images/{stem}.png"
-                    mask_name = f"masks/{stem}.png"
+                    existing_images.add(image_name)
+                    existing_masks.add(mask_name)
                     if not cv2.imwrite(str(args.output / image_name), crop):
                         print(f"Unable to save image crop for {path}")
                         continue
