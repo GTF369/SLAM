@@ -1302,6 +1302,11 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "请先完成拍照和眉形设计", Toast.LENGTH_SHORT).show()
             return
         }
+        val anonymousClientCode = EditText(this).apply {
+            hint = "匿名顾客代码（同一顾客多次设计请沿用）"
+            setSingleLine(true)
+            setText(currentCaseId)
+        }
         val ratingLabel = TextView(this).apply {
             text = "顾客满意度：5 / 5"
             textSize = 15f
@@ -1328,6 +1333,7 @@ class MainActivity : AppCompatActivity() {
                 text = "记录的是匿名几何特征、方案参数和顾客反馈，不保存照片或身份信息。需先获得顾客授权。"
                 textSize = 13f
             })
+            addView(anonymousClientCode)
             addView(ratingLabel)
             addView(ratingBar)
             addView(selected)
@@ -1341,8 +1347,12 @@ class MainActivity : AppCompatActivity() {
                 val dataset = org.json.JSONArray(
                     getSharedPreferences("brow_preference_feedback", Context.MODE_PRIVATE).getString("records", "[]")
                 )
+                val consentedAnonymousId = anonymousClientCode.text.toString().trim()
+                    .filter { it.isLetterOrDigit() || it == '_' || it == '-' }
+                    .take(32)
+                    .ifBlank { currentCaseId }
                 val item = org.json.JSONObject().apply {
-                    put("case_id", currentCaseId)
+                    put("case_id", consentedAnonymousId)
                     put("style", when (params.style) { 1 -> "soft"; 2 -> "defined"; else -> "natural" })
                     put("thickness", params.thickness.toDouble())
                     put("length", params.length.toDouble())
