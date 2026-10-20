@@ -142,7 +142,7 @@ class MainActivity : AppCompatActivity() {
         panel.addView(liveControls)
 
         designControls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        addTextLabel(designControls, "选择眉形 · 预览中的适配排序为规则原型，不代表真实 AI 概率")
+        addTextLabel(designControls, "选择基础眉形 · 当前为可调原型，尚未训练真实 AI 适配度模型")
         addButtonRow(designControls, listOf(
             "自然款" to { animateTo(BrowParams(1.0f, 1.0f, 0.92f, 0)) },
             "柔和款" to { animateTo(BrowParams(0.82f, 0.94f, 0.72f, 1)) },
@@ -779,12 +779,12 @@ private object BrowRenderer {
     )
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
-    fun drawBrows(canvas: Canvas, points: List<PointF>, params: BrowParams) {
+    fun drawBrows(canvas: Canvas, points: List<PointF>, params: BrowParams, outlineOnly: Boolean = false) {
         if (points.size < 455) return
-        browSets.forEach { ids -> drawOne(canvas, points, ids, params) }
+        browSets.forEach { ids -> drawOne(canvas, points, ids, params, outlineOnly) }
     }
 
-    private fun drawOne(canvas: Canvas, points: List<PointF>, ids: IntArray, params: BrowParams) {
+    private fun drawOne(canvas: Canvas, points: List<PointF>, ids: IntArray, params: BrowParams, outlineOnly: Boolean) {
         val valid = ids.mapNotNull { points.getOrNull(it) }.filter { it.x.isFinite() && it.y.isFinite() }
         if (valid.size < 4) return
         val nose = points.getOrNull(1) ?: return
@@ -822,6 +822,18 @@ private object BrowRenderer {
         top.drop(1).forEach { path.lineTo(it.x, it.y) }
         bottom.asReversed().forEach { path.lineTo(it.x, it.y) }
         path.close()
+        if (outlineOnly) {
+            paint.shader = null
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = max(1.0f, span * 0.003f)
+            paint.strokeJoin = Paint.Join.ROUND
+            paint.strokeCap = Paint.Cap.ROUND
+            paint.color = Color.BLACK
+            canvas.drawPath(path, paint)
+            paint.style = Paint.Style.FILL
+            paint.strokeWidth = 1f
+            return
+        }
         val colors = when (params.style) {
             1 -> intArrayOf(Color.argb(140, 94, 65, 51), Color.argb(165, 112, 77, 59))
             2 -> intArrayOf(Color.argb(175, 45, 29, 22), Color.argb(210, 55, 34, 25))
@@ -866,7 +878,7 @@ private object BrowRenderer {
     fun createTemplate(points: List<PointF>, params: BrowParams, width: Int, height: Int): Bitmap? {
         if (points.size < 455) return null
         val full = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        drawBrows(Canvas(full), points, params)
+        drawBrows(Canvas(full), points, params, outlineOnly = true)
         val browPoints = browSets.flatMap { ids -> ids.mapNotNull { points.getOrNull(it) } }
         if (browPoints.isEmpty()) {
             full.recycle()
