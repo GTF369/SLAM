@@ -80,10 +80,16 @@ The Android app has two modes:
 ### Train and export
 
 ```bash
-python ml/train_brow_segmentation.py --dataset /local/brow_dataset --output app/src/main/assets/brow_segmentation.tflite --metrics ml/brow_segmentation_metrics.json
+python ml/train_brow_segmentation.py --dataset /local/brow_dataset --output ml/artifacts/brow_segmentation_candidate.tflite --metrics ml/brow_segmentation_metrics.json
 ```
 
-The training script uses a compact U-Net, binary-cross-entropy plus Dice loss, aligned paired augmentations, and a case-grouped holdout. It refuses to train fewer than 50 distinct cases by default. This is only an initial exploratory floor, not a sufficient commercial sample-size claim. Review the mask quality, Dice/IoU, failure cases and group-level results before committing a model. Validate on independent clients, skin tones, makeup, lighting and camera conditions and then on the target Android device.
+By default the output is a candidate model and is **not** copied into the Android app. After reviewing masks and holdout examples, an initial internal screening step can be run with:
+
+```bash
+python ml/train_brow_segmentation.py --dataset /local/brow_dataset --output ml/artifacts/brow_segmentation_candidate.tflite --metrics ml/brow_segmentation_metrics.json --promote-to-app --min-validation-dice 0.70
+```
+
+The second command only copies the model to app assets if the grouped holdout Dice is at least 0.70. Passing that internal gate still does not mean the model is commercially validated. The training script uses a compact U-Net, binary-cross-entropy plus Dice loss, aligned paired augmentations, and a case-grouped holdout. It refuses to train fewer than 50 distinct cases by default. This is only an initial exploratory floor, not a sufficient commercial sample-size claim. Review the mask quality, Dice/IoU, false-positive and false-negative examples before committing a model. Validate on independent clients, skin tones, makeup, lighting and camera conditions and then on the target Android device.
 
 No trained brow-segmentation model is shipped in this repository because no authorized, professionally annotated dataset was supplied. The application therefore uses the adaptive pre-segmentation fallback until a compatible trained model is added.
 
