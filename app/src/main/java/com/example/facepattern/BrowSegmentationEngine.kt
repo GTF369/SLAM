@@ -7,6 +7,9 @@ import android.graphics.PointF
 import android.os.SystemClock
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -39,12 +42,13 @@ private data class FaceParsingMap(
  * The learned model is a starting point and still requires professional review.
  */
 internal object BrowSegmentationEngine {
-    private const val MODEL_SIZE = 512
+    private const val PARSING_MODEL_SIZE = 384
     private const val CUSTOM_MODEL_SIZE = 256
-    private const val PARSING_CLASSES = 19
-    private val mean = floatArrayOf(0.485f, 0.456f, 0.406f)
-    private val std = floatArrayOf(0.229f, 0.224f, 0.225f)
-    private enum class ModelKind { CUSTOM_BROW, BISE_NET_FACE_PARSING }
+    private const val PARSING_CLASSES = 8
+    // EasyPortrait face-parsing BGR input statistics, applied to pixel values in [0,255].
+    private val meanBgr = floatArrayOf(143.55267f, 132.96706f, 126.94924f)
+    private val stdBgr = floatArrayOf(60.26253f, 60.32740f, 59.30989f)
+    private enum class ModelKind { CUSTOM_BROW }
     private val browSets = listOf(
         intArrayOf(70, 63, 105, 66, 107),
         intArrayOf(300, 293, 334, 296, 336)
@@ -52,60 +56,73 @@ internal object BrowSegmentationEngine {
     private var modelAttempted = false
     private var model: Interpreter? = null
     private var modelKind: ModelKind? = null
+    private var onnxAttempted = false
+    private var onnxEnvironment: OrtEnvironment? = null
+    private var onnxSession: OrtSession? = null
+    private var onnxInputName = "image"
+    private var onnxOutputName = "logits"
 
     @Synchronized
     private fun loadModel(context: Context): Interpreter? {
         if (modelAttempted) return model
         modelAttempted = true
         val assets = context.assets.list("")?.toSet().orEmpty()
-
-        // Prefer a customer-authorized fine-tuned binary eyebrow model when one
-        // is installed. Otherwise use the bundled full-face BiSeNet parser.
-        if ("brow_segmentation.tflite" in assets) {
-            var candidate: Interpreter? = null
-            try {
-                val bytes = context.assets.open("brow_segmentation.tflite").use { it.readBytes() }
-                val mapped = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder())
-                mapped.put(bytes)
-                mapped.rewind()
-                candidate = Interpreter(mapped, Interpreter.Options().setNumThreads(2))
-                val input = candidate.getInputTensor(0).shape()
-                val output = candidate.getOutputTensor(0).shape()
-                if (input.contentEquals(intArrayOf(1, CUSTOM_MODEL_SIZE, CUSTOM_MODEL_SIZE, 3)) &&
-                    output.contentEquals(intArrayOf(1, CUSTOM_MODEL_SIZE, CUSTOM_MODEL_SIZE, 1))) {
-                    model = candidate
-                    modelKind = ModelKind.CUSTOM_BROW
-                    return model
-                }
-            } catch (_: Exception) {
-                // Fall through to the whole-face parsing model if this candidate is invalid.
-            }
-            try { candidate?.close() } catch (_: Exception) {}
-        }
-
-        if ("faceparsing.tflite" !in assets) return null
+        if ("brow_segmentation.tflite" !in assets) return null
         var candidate: Interpreter? = null
         try {
-            val bytes = context.assets.open("faceparsing.tflite").use { it.readBytes() }
+            val bytes = context.assets.open("brow_segmentation.tflite").use { it.readBytes() }
             val mapped = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder())
             mapped.put(bytes)
             mapped.rewind()
             candidate = Interpreter(mapped, Interpreter.Options().setNumThreads(2))
             val input = candidate.getInputTensor(0).shape()
             val output = candidate.getOutputTensor(0).shape()
-            if (!input.contentEquals(intArrayOf(1, 3, MODEL_SIZE, MODEL_SIZE)) ||
-                !output.contentEquals(intArrayOf(1, PARSING_CLASSES, MODEL_SIZE, MODEL_SIZE))) {
+            if (input.contentEquals(intArrayOf(1, CUSTOM_MODEL_SIZE, CUSTOM_MODEL_SIZE, 3)) &&
+                output.contentEquals(intArrayOf(1, CUSTOM_MODEL_SIZE, CUSTOM_MODEL_SIZE, 1))) {
+                model = candidate
+                modelKind = ModelKind.CUSTOM_BROW
+            } else {
                 candidate.close()
-                return null
             }
-            model = candidate
-            modelKind = ModelKind.BISE_NET_FACE_PARSING
         } catch (_: Exception) {
             try { candidate?.close() } catch (_: Exception) {}
             model = null
             modelKind = null
         }
         return model
+    }
+
+    @Synchronized
+    private fun loadFaceParsingSession(context: Context): OrtSession? {
+        if (onnxAttempted) return onnxSession
+        onnxAttempted = true
+        if ("faceparsing.onnx" !in context.assets.list("")?.toSet().orEmpty()) return null
+        var candidate: OrtSession? = null
+        var options: OrtSession.SessionOptions? = null
+        try {
+            val modelBytes = context.assets.open("faceparsing.onnx").use { it.readBytes() }
+            val environment = OrtEnvironment.getEnvironment()
+            options = OrtSession.SessionOptions()
+            candidate = environment.createSession(modelBytes, options)
+            val inputName = candidate.inputNames.firstOrNull()
+            val outputName = candidate.outputNames.firstOrNull()
+            if (inputName == null || outputName == null) {
+                candidate.close()
+                return null
+            }
+            onnxEnvironment = environment
+            onnxSession = candidate
+            onnxInputName = inputName
+            onnxOutputName = outputName
+            return onnxSession
+        } catch (_: Exception) {
+            try { candidate?.close() } catch (_: Exception) {}
+            onnxSession = null
+            onnxEnvironment = null
+            return null
+        } finally {
+            try { options?.close() } catch (_: Exception) {}
+        }
     }
 
     fun segment(
@@ -127,9 +144,10 @@ internal object BrowSegmentationEngine {
         val colors = IntArray(overlay.width * overlay.height)
         val loadedModel = loadModel(context)
         val activeModelKind = modelKind
+        val faceParsingSession = if (loadedModel == null) loadFaceParsingSession(context) else null
         val faceParsing = try {
-            if (loadedModel != null && activeModelKind == ModelKind.BISE_NET_FACE_PARSING) {
-                predictFaceParsing(loadedModel, source, landmarks)
+            if (faceParsingSession != null) {
+                predictFaceParsing(faceParsingSession, source, landmarks)
             } else {
                 null
             }
@@ -148,10 +166,11 @@ internal object BrowSegmentationEngine {
             val y1 = bounds[3]
             val roi = Bitmap.createBitmap(source, x0, y0, x1 - x0, y1 - y0)
             val modelMask = try {
-                when (activeModelKind) {
-                    ModelKind.CUSTOM_BROW -> loadedModel?.let { predictWithCustomBrowModel(it, roi) }
-                    ModelKind.BISE_NET_FACE_PARSING -> faceParsing?.let { maskFromFaceParsing(it, bounds) }
-                    null -> null
+                when {
+                    activeModelKind == ModelKind.CUSTOM_BROW ->
+                        loadedModel?.let { predictWithCustomBrowModel(it, roi) }
+                    faceParsing != null -> maskFromFaceParsing(faceParsing, bounds)
+                    else -> null
                 }
             } catch (_: Exception) {
                 null
@@ -197,7 +216,7 @@ internal object BrowSegmentationEngine {
         val modelLabel = if (activeModelKind == ModelKind.CUSTOM_BROW) {
             "客户数据训练的眉毛分割模型"
         } else {
-            "BiSeNet 人脸解析模型"
+            "EasyPortrait BiSeNet 人脸解析模型"
         }
         val method = when {
             !usedModel -> "自适应对比度预分割"
@@ -266,7 +285,7 @@ internal object BrowSegmentationEngine {
     }
 
     private fun predictFaceParsing(
-        interpreter: Interpreter,
+        session: OrtSession,
         source: Bitmap,
         landmarks: List<PointF>
     ): FaceParsingMap? {
@@ -290,51 +309,61 @@ internal object BrowSegmentationEngine {
         val cropLeft = (centerX - side / 2f).toInt().coerceIn(0, source.width - side)
         val cropTop = (centerY - side / 2f).toInt().coerceIn(0, source.height - side)
         val faceCrop = Bitmap.createBitmap(source, cropLeft, cropTop, side, side)
-        val scaled = Bitmap.createScaledBitmap(faceCrop, MODEL_SIZE, MODEL_SIZE, true)
+        val scaled = Bitmap.createScaledBitmap(faceCrop, PARSING_MODEL_SIZE, PARSING_MODEL_SIZE, true)
         if (scaled !== faceCrop && !faceCrop.isRecycled) faceCrop.recycle()
 
         try {
-            val pixels = IntArray(MODEL_SIZE * MODEL_SIZE)
-            scaled.getPixels(pixels, 0, MODEL_SIZE, 0, 0, MODEL_SIZE, MODEL_SIZE)
-            val input = ByteBuffer.allocateDirect(
-                MODEL_SIZE * MODEL_SIZE * 3 * 4
-            ).order(ByteOrder.nativeOrder())
+            val pixels = IntArray(PARSING_MODEL_SIZE * PARSING_MODEL_SIZE)
+            scaled.getPixels(pixels, 0, PARSING_MODEL_SIZE, 0, 0, PARSING_MODEL_SIZE, PARSING_MODEL_SIZE)
+            val inputBuffer = ByteBuffer.allocateDirect(
+                PARSING_MODEL_SIZE * PARSING_MODEL_SIZE * 3 * 4
+            ).order(ByteOrder.nativeOrder()).asFloatBuffer()
 
-            // The released model expects NCHW RGB channels normalized with
-            // ImageNet mean/std, rather than interleaved RGB values in [0,1].
+            // EasyPortrait BiSeNet uses NCHW BGR pixels in [0,255] and the
+            // per-channel mean/std published with its ONNX model.
             for (channel in 0..2) {
                 for (pixel in pixels) {
                     val channelValue = when (channel) {
-                        0 -> Color.red(pixel) / 255f
-                        1 -> Color.green(pixel) / 255f
-                        else -> Color.blue(pixel) / 255f
+                        0 -> Color.blue(pixel).toFloat()
+                        1 -> Color.green(pixel).toFloat()
+                        else -> Color.red(pixel).toFloat()
                     }
-                    input.putFloat((channelValue - mean[channel]) / std[channel])
+                    inputBuffer.put((channelValue - meanBgr[channel]) / stdBgr[channel])
                 }
             }
-            input.rewind()
-
-            val output = ByteBuffer.allocateDirect(
-                PARSING_CLASSES * MODEL_SIZE * MODEL_SIZE * 4
-            ).order(ByteOrder.nativeOrder())
-            interpreter.run(input, output)
-            output.rewind()
-            val logits = output.asFloatBuffer()
-            val planeSize = MODEL_SIZE * MODEL_SIZE
-            val labels = ByteArray(planeSize)
-            for (pixel in 0 until planeSize) {
-                var bestClass = 0
-                var bestValue = logits.get(pixel)
-                for (classIndex in 1 until PARSING_CLASSES) {
-                    val value = logits.get(classIndex * planeSize + pixel)
-                    if (value > bestValue) {
-                        bestValue = value
-                        bestClass = classIndex
+            inputBuffer.rewind()
+            val environment = onnxEnvironment ?: OrtEnvironment.getEnvironment()
+            val inputTensor = OnnxTensor.createTensor(
+                environment,
+                inputBuffer,
+                longArrayOf(1L, 3L, PARSING_MODEL_SIZE.toLong(), PARSING_MODEL_SIZE.toLong())
+            )
+            try {
+                val outputs = session.run(mapOf(onnxInputName to inputTensor))
+                try {
+                    val outputTensor = outputs.get(onnxOutputName) as? OnnxTensor ?: return null
+                    val logits = outputTensor.floatBuffer
+                    val planeSize = PARSING_MODEL_SIZE * PARSING_MODEL_SIZE
+                    val labels = ByteArray(planeSize)
+                    for (pixel in 0 until planeSize) {
+                        var bestClass = 0
+                        var bestValue = logits.get(pixel)
+                        for (classIndex in 1 until PARSING_CLASSES) {
+                            val value = logits.get(classIndex * planeSize + pixel)
+                            if (value > bestValue) {
+                                bestValue = value
+                                bestClass = classIndex
+                            }
+                        }
+                        labels[pixel] = bestClass.toByte()
                     }
+                    return FaceParsingMap(labels, cropLeft, cropTop, side)
+                } finally {
+                    outputs.close()
                 }
-                labels[pixel] = bestClass.toByte()
+            } finally {
+                inputTensor.close()
             }
-            return FaceParsingMap(labels, cropLeft, cropTop, side)
         } finally {
             if (!scaled.isRecycled) scaled.recycle()
         }
@@ -352,19 +381,19 @@ internal object BrowSegmentationEngine {
         var index = 0
         for (y in 0 until height) {
             val imageY = y0 + y
-            val modelY = (((imageY + 0.5f - parsed.cropTop) * MODEL_SIZE) / parsed.cropSize)
+            val modelY = (((imageY + 0.5f - parsed.cropTop) * PARSING_MODEL_SIZE) / parsed.cropSize)
                 .toInt()
-            if (modelY !in 0 until MODEL_SIZE) {
+            if (modelY !in 0 until PARSING_MODEL_SIZE) {
                 index += width
                 continue
             }
             for (x in 0 until width) {
                 val imageX = x0 + x
-                val modelX = (((imageX + 0.5f - parsed.cropLeft) * MODEL_SIZE) / parsed.cropSize)
+                val modelX = (((imageX + 0.5f - parsed.cropLeft) * PARSING_MODEL_SIZE) / parsed.cropSize)
                     .toInt()
-                if (modelX in 0 until MODEL_SIZE) {
-                    val label = parsed.labels[modelY * MODEL_SIZE + modelX].toInt() and 0xFF
-                    // 2 = left eyebrow, 3 = right eyebrow in the model card.
+                if (modelX in 0 until PARSING_MODEL_SIZE) {
+                    val label = parsed.labels[modelY * PARSING_MODEL_SIZE + modelX].toInt() and 0xFF
+                    // EasyPortrait classes: 2 = left brow, 3 = right brow.
                     result[index] = label == 2 || label == 3
                 }
                 index++
@@ -417,8 +446,12 @@ internal object BrowSegmentationEngine {
     fun close() {
         synchronized(this) {
             try { model?.close() } catch (_: Exception) {}
+            try { onnxSession?.close() } catch (_: Exception) {}
             model = null
             modelKind = null
+            onnxSession = null
+            onnxEnvironment = null
+            onnxAttempted = false
             modelAttempted = false
         }
     }
