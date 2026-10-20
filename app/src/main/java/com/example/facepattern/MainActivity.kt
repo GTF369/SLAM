@@ -90,6 +90,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var designControls: LinearLayout
     private lateinit var plansRow: LinearLayout
     private lateinit var recommendationRow: LinearLayout
+    private lateinit var recommendationLabel: TextView
     private lateinit var pauseButton: Button
     private lateinit var thicknessSeek: SeekBar
     private lateinit var lengthSeek: SeekBar
@@ -158,7 +159,12 @@ class MainActivity : AppCompatActivity() {
         panel.addView(liveControls)
 
         designControls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        addTextLabel(designControls, "候选方案按面部比例几何规则初排，显示参考分，不等同于真实 AI 概率")
+        recommendationLabel = TextView(this).apply {
+            textSize = 11f
+            setTextColor(0xFFE0E1E5.toInt())
+            setPadding(dp(2), dp(2), dp(2), dp(6))
+        }
+        designControls.addView(recommendationLabel)
         recommendationRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -552,7 +558,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshRecommendations(points: List<PointF>) {
         recommendationRow.removeAllViews()
-        val ranked = BrowRecommendationEngine.rank(points)
+        val ranked = BrowRecommendationEngine.rank(this, points)
+        recommendationLabel.text = BrowRecommendationEngine.sourceLabel(this)
         ranked.forEach { recommendation ->
             val button = Button(this).apply {
                 text = "${recommendation.name}\n参考分 ${recommendation.score}"
@@ -1255,37 +1262,97 @@ private data class BrowRecommendation(
  * Scores are not probabilities and must not be presented as validated AI output.
  */
 private object BrowRecommendationEngine {
+    private data class TrainedModel(
+        val means: FloatArray,
+        val scales: FloatArray,
+        val coefficients: FloatArray,
+        val intercept: Float
+    )
+    private var loadAttempted = false
+    private var trainedModel: TrainedModel? = null
+
     fun measurements(points: List<PointF>): Pair<Float, Float> {
         if (points.size <= 454) return 0f to 0f
         val faceWidth = distance(points[234], points[454])
-        val faceHeight = distance(points.getOrNull(10) ?: points[234], points.getOrNull(152) ?: points[454]).coerceAtLeast(1f)
+        val faceHeight = distance(
+            points.getOrNull(10) ?: points[234],
+            points.getOrNull(152) ?: points[454]
+        ).coerceAtLeast(1f)
         val ratio = faceWidth / faceHeight
         val asymmetry = if (points.size > 334) abs(points[105].y - points[334].y) / faceHeight else 0f
         return ratio to asymmetry
     }
 
-    fun rank(points: List<PointF>): List<BrowRecommendation> {
-        if (points.size <= 454) return defaultSuggestions()
-        val widthHeightRatio = measurements(points).first
-        val browHeightDifference = measurements(points).second
-        // This is only a tunable heuristic signal, not a clinical or population norm.
-        val shapeSignal = ((widthHeightRatio - 0.72f) / 0.18f).coerceIn(-1f, 1f)
-        val asymmetryPenalty = (browHeightDifference * 35f).coerceIn(0f, 5f)
-        val naturalScore = (82f - abs(shapeSignal) * 3.5f - asymmetryPenalty).roundToInt().coerceIn(60, 95)
-        val softScore = (78f + if (shapeSignal < 0f) -shapeSignal * 6f else -shapeSignal * 2f - asymmetryPenalty * 0.6f).roundToInt().coerceIn(60, 95)
-        val definedScore = (76f + if (shapeSignal > 0f) shapeSignal * 7f else shapeSignal * 2f - asymmetryPenalty * 0.4f).roundToInt().coerceIn(60, 95)
+    fun sourceLabel(context: Context): String =
+        if (loadModel(context) != null) {
+            "已加载偏好模型。分数表示候选偏好得分，不是保证结果的概率，仍需顾客与纹绣师确认。"
+        } else {
+            "当前使用几何规则参考分，非训练后的 AI 概率。采集匿名偏好反馈并经验证后，可加载 brow_ranker.json。"
+        }
+
+    fun rank(context: Context, points: List<PointF>): List<BrowRecommendation> {
+        val features = measurements(points)
+        val templates = listOf(
+            BrowRecommendation("自然款", 82, BrowParams(1.0f, 1.0f, 0.92f, 0), "自然款：较保守的参数基线，仍需纹绣师确认"),
+            BrowRecommendation("柔和款", 78, BrowParams(0.82f, 0.94f, 0.72f, 1), "柔和款：较低粗细与弧度的参数预设"),
+            BrowRecommendation("立体款", 76, BrowParams(1.18f, 1.06f, 1.22f, 2), "立体款：较高粗细与弧度的参数预设")
+        )
+        val model = loadModel(context)
+        if (model != null) {
+            return templates.map { option ->
+                val x = floatArrayOf(
+                    features.first,
+                    features.second,
+                    option.params.thickness,
+                    option.params.length,
+                    option.params.arch,
+                    if (option.params.style == 1) 1f else 0f,
+                    if (option.params.style == 2) 1f else 0f
+                )
+                option.copy(score = (predict(model, x) * 100f).roundToInt().coerceIn(0, 100))
+            }.sortedByDescending { it.score }
+        }
+        val shapeSignal = ((features.first - 0.72f) / 0.18f).coerceIn(-1f, 1f)
+        val penalty = (features.second * 35f).coerceIn(0f, 5f)
         return listOf(
-            BrowRecommendation("自然款", naturalScore, BrowParams(1.0f, 1.0f, 0.92f, 0), "自然款：较保守的参数基线，仍需纹绣师确认"),
-            BrowRecommendation("柔和款", softScore, BrowParams(0.82f, 0.94f, 0.72f, 1), "柔和款：较低粗细与弧度的参数预设"),
-            BrowRecommendation("立体款", definedScore, BrowParams(1.18f, 1.06f, 1.22f, 2), "立体款：较高粗细与弧度的参数预设")
+            templates[0].copy(score = (82f - abs(shapeSignal) * 3.5f - penalty).roundToInt().coerceIn(60, 95)),
+            templates[1].copy(score = (78f + (if (shapeSignal < 0f) -shapeSignal * 6f else -shapeSignal * 2f) - penalty * 0.6f).roundToInt().coerceIn(60, 95)),
+            templates[2].copy(score = (76f + (if (shapeSignal > 0f) shapeSignal * 7f else shapeSignal * 2f) - penalty * 0.4f).roundToInt().coerceIn(60, 95))
         ).sortedByDescending { it.score }
     }
 
-    private fun defaultSuggestions() = listOf(
-        BrowRecommendation("自然款", 82, BrowParams(1.0f, 1.0f, 0.92f, 0), "自然款：默认参数"),
-        BrowRecommendation("柔和款", 78, BrowParams(0.82f, 0.94f, 0.72f, 1), "柔和款：默认参数"),
-        BrowRecommendation("立体款", 76, BrowParams(1.18f, 1.06f, 1.22f, 2), "立体款：默认参数")
-    )
+    private fun loadModel(context: Context): TrainedModel? {
+        if (loadAttempted) return trainedModel
+        loadAttempted = true
+        return try {
+            val json = context.assets.open("brow_ranker.json").bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val root = org.json.JSONObject(json)
+            val meansJson = root.getJSONArray("means")
+            val scalesJson = root.getJSONArray("scales")
+            val coefficientsJson = root.getJSONArray("coefficients")
+            if (meansJson.length() != 7 || scalesJson.length() != 7 || coefficientsJson.length() != 7) return null
+            trainedModel = TrainedModel(
+                FloatArray(7) { meansJson.getDouble(it).toFloat() },
+                FloatArray(7) { scalesJson.getDouble(it).toFloat().let { scale -> if (abs(scale) < 1e-8f) 1f else scale } },
+                FloatArray(7) { coefficientsJson.getDouble(it).toFloat() },
+                root.getDouble("intercept").toFloat()
+            )
+            trainedModel
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun predict(model: TrainedModel, x: FloatArray): Float {
+        var logit = model.intercept
+        for (i in x.indices) {
+            val scaled = (x[i] - model.means[i]) / model.scales[i]
+            logit += model.coefficients[i] * scaled
+        }
+        val bounded = logit.coerceIn(-20f, 20f)
+        return (1f / (1f + kotlin.math.exp(-bounded)))
+    }
+
     private fun distance(a: PointF, b: PointF): Float =
         hypot((a.x - b.x).toDouble(), (a.y - b.y).toDouble()).toFloat()
 }
