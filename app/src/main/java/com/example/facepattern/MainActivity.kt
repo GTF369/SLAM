@@ -1172,8 +1172,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun askPrintCalibration() {
         val points = browView.facePoints()
-        if (points.size < 470 || capturedPhoto == null) {
-            Toast.makeText(this, "当前照片的面部关键点不足，无法建立打印比例", Toast.LENGTH_LONG).show()
+        if (points.size < 478 || capturedPhoto == null) {
+            Toast.makeText(this, "未检测到完整虹膜关键点，暂时无法可靠建立 1:1 打印比例，请重新拍摄", Toast.LENGTH_LONG).show()
             return
         }
         val input = EditText(this).apply {
@@ -1653,23 +1653,18 @@ private object BrowRenderer {
     }
 
     fun pupilDistance(points: List<PointF>): Float {
-        if (points.size >= 478) {
-            fun average(indices: IntRange): PointF {
-                var x = 0f
-                var y = 0f
-                indices.forEach { x += points[it].x; y += points[it].y }
-                return PointF(x / indices.count(), y / indices.count())
-            }
-            val left = average(468..472)
-            val right = average(473..477)
-            return hypot((left.x - right.x).toDouble(), (left.y - right.y).toDouble()).toFloat()
+        // Do not silently substitute eye-corner distance for interpupillary distance:
+        // that would introduce a systematic physical print-scale error.
+        if (points.size < 478) return 0f
+        fun average(indices: IntRange): PointF {
+            var x = 0f
+            var y = 0f
+            indices.forEach { x += points[it].x; y += points[it].y }
+            return PointF(x / indices.count(), y / indices.count())
         }
-        if (points.size > 263) {
-            val left = points[33]
-            val right = points[263]
-            return hypot((left.x - right.x).toDouble(), (left.y - right.y).toDouble()).toFloat()
-        }
-        return 0f
+        val leftIris = average(468..472)
+        val rightIris = average(473..477)
+        return hypot((leftIris.x - rightIris.x).toDouble(), (leftIris.y - rightIris.y).toDouble()).toFloat()
     }
 
     fun renderPreview(source: Bitmap, points: List<PointF>, params: BrowParams, maxWidth: Int): Bitmap {
