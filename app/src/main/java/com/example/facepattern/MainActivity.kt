@@ -1406,6 +1406,25 @@ private object BrowRecommendationEngine {
         return try {
             val json = context.assets.open("brow_ranker.json").bufferedReader(Charsets.UTF_8).use { it.readText() }
             val root = org.json.JSONObject(json)
+            if (root.optInt("model_version", -1) != 1) return null
+            val expectedFeatures = listOf(
+                "face_width_height_ratio",
+                "interocular_face_width_ratio",
+                "jaw_face_width_ratio",
+                "brow_eye_distance_ratio",
+                "brow_asymmetry_ratio",
+                "eye_line_tilt",
+                "thickness",
+                "length",
+                "arch",
+                "style_soft",
+                "style_defined"
+            )
+            val featureOrder = root.optJSONArray("feature_order") ?: return null
+            if (featureOrder.length() != expectedFeatures.size) return null
+            for (i in expectedFeatures.indices) {
+                if (featureOrder.optString(i) != expectedFeatures[i]) return null
+            }
             val meansJson = root.getJSONArray("means")
             val scalesJson = root.getJSONArray("scales")
             val coefficientsJson = root.getJSONArray("coefficients")
