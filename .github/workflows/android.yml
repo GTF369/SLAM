@@ -38,6 +38,13 @@ jobs:
           mkdir -p app/src/main/assets
           curl --fail --location --retry 3 --output app/src/main/assets/face_landmarker.task https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task
           test -s app/src/main/assets/face_landmarker.task
+      - name: Download BiSeNet face parsing model
+        run: |
+          curl --fail --location --retry 3 --output app/src/main/assets/faceparsing.tflite https://huggingface.co/litert-community/BiSeNet-Face-Parsing-LiteRT/resolve/main/faceparsing.tflite
+          test -s app/src/main/assets/faceparsing.tflite
+          actual_size="$(stat -c%s app/src/main/assets/faceparsing.tflite)"
+          echo "Downloaded faceparsing.tflite: ${actual_size} bytes"
+          test "${actual_size}" -gt 40000000
       - name: Build debug APK
         run: gradle --no-daemon assembleDebug
       - name: Upload APK artifact
