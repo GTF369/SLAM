@@ -10,6 +10,8 @@ from train_brow_ranker import (
     choose_group_split,
     expected_calibration_error,
     calibration_metrics,
+    geometric_reference_scores,
+    clustered_auc_comparison_ci,
 )
 
 
@@ -53,6 +55,25 @@ class BrowRankerTests(unittest.TestCase):
         y = np.asarray([0, 0, 1, 1])
         probs = np.asarray([0.0, 0.0, 1.0, 1.0])
         self.assertAlmostEqual(expected_calibration_error(y, probs), 0.0)
+
+    def test_geometric_baseline_returns_expected_family_order_scores(self):
+        x, _, _ = build_matrix(synthetic_rows(4))
+        scores = geometric_reference_scores(x)
+        self.assertEqual(scores.shape, (8,))
+        self.assertTrue(np.isfinite(scores).all())
+
+    def test_cluster_bootstrap_compares_candidate_to_rule_baseline(self):
+        rows = synthetic_rows(50)
+        x, y, groups = build_matrix(rows)
+        # A deterministic score that follows the high/low rating labels.
+        candidate = np.where(y == 1, 0.9, 0.1)
+        baseline = geometric_reference_scores(x)
+        comparison = clustered_auc_comparison_ci(
+            y, candidate, baseline, groups, seed=23, draws=300
+        )
+        self.assertGreater(comparison["auc_ci95_low"], 0.9)
+        self.assertGreater(comparison["auc_gain_over_geometry_ci95_low"], 0.0)
+        self.assertGreaterEqual(comparison["valid_bootstrap_draws"], 150)
 
     def test_calibration_metrics_include_prevalence_baseline(self):
         y = np.asarray([0, 0, 1, 1])
