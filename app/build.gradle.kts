@@ -43,4 +43,5 @@ dependencies {
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation("com.google.mediapipe:tasks-vision:0.10.21")
     implementation("org.tensorflow:tensorflow-lite:2.17.0")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.23.2")
 }
