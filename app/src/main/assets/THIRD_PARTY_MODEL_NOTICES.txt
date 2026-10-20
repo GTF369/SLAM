@@ -1,0 +1,19 @@
+Third-party model notices for Brow Design Assistant (self-use prototype)
+
+1) EasyPortrait BiSeNet face parsing model
+   File: faceparsing.onnx
+   Source model repository: https://huggingface.co/sadzip/EasyPortrait-ONNX
+   Original project: https://github.com/hukenovs/easyportrait
+   The EasyPortrait ONNX repository labels its export repository Apache-2.0. The original project states that its dataset and released models use a variant of CC BY-SA 4.0. A project maintainer confirmed that published models share the same licence in https://github.com/hukenovs/easyportrait/issues/25.
+   Specific upstream licence: https://github.com/hukenovs/easyportrait/blob/main/license/en_us.pdf
+   This notice is not a substitute for the full terms. Before commercial redistribution or deployment, review the upstream licence, preserve attribution, and meet any share-alike or other conditions that apply.
+
+   Model file in this app is downloaded at build time from:
+   https://huggingface.co/sadzip/EasyPortrait-ONNX/resolve/main/bisenet_fp.onnx
+
+2) MediaPipe Face Landmarker
+   File: face_landmarker.task
+   Source: https://developers.google.com/mediapipe
+   The model is downloaded by the build workflow from Google's published MediaPipe model storage. Review the current MediaPipe and model-card terms for your intended use.
+
+The app performs inference locally. Inclusion of a model file does not mean that model performance has been validated for eyebrow embroidery, all skin tones, makeup, lighting conditions, or all Android devices. Review and correct the eyebrow mask manually before use.
