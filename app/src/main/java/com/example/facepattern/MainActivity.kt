@@ -1411,9 +1411,9 @@ private object BrowRecommendationEngine {
             val coefficientsJson = root.getJSONArray("coefficients")
             if (meansJson.length() != 11 || scalesJson.length() != 11 || coefficientsJson.length() != 11) return null
             trainedModel = TrainedModel(
-                FloatArray(7) { meansJson.getDouble(it).toFloat() },
-                FloatArray(7) { scalesJson.getDouble(it).toFloat().let { scale -> if (abs(scale) < 1e-8f) 1f else scale } },
-                FloatArray(7) { coefficientsJson.getDouble(it).toFloat() },
+                FloatArray(11) { meansJson.getDouble(it).toFloat() },
+                FloatArray(11) { scalesJson.getDouble(it).toFloat().let { scale -> if (abs(scale) < 1e-8f) 1f else scale } },
+                FloatArray(11) { coefficientsJson.getDouble(it).toFloat() },
                 root.getDouble("intercept").toFloat()
             )
             trainedModel
