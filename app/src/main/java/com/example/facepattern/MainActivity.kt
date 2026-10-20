@@ -903,7 +903,7 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(8), dp(18), 0)
             addView(TextView(this@MainActivity).apply {
-                text = "用于建立个体和区域的实测曲率数据。用柔性尺测量皮肤表面弧长，同时记录同一段两端的直线距离。不要用照片像素代替实测毫米。"
+                text = "用于建立个体和区域的实测曲率数据。用柔性尺测量皮肤表面弧长，同时记录同一段两端的直线距离。不要用照片像素代替实测毫米。系统还会按局部圆弧假设估计半径，该估计不是三维面部重建结果。"
                 textSize = 13f
             })
             addView(caseIdField)
@@ -918,11 +918,12 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("计算并保存") { _, _ ->
                 val arcMm = field.text.toString().toFloatOrNull()
                 val chordMm = chord.text.toString().toFloatOrNull()
-                if (arcMm == null || chordMm == null || chordMm <= 0f || arcMm < chordMm || arcMm > chordMm * 2f) {
-                    Toast.makeText(this, "请检查实测值。弧长应不小于直线距离，且数值需合理", Toast.LENGTH_LONG).show()
+                if (arcMm == null || chordMm == null || chordMm <= 0f || arcMm < chordMm || arcMm > chordMm * 1.5708f) {
+                    Toast.makeText(this, "请检查实测值。单段圆弧模型要求弧长不小于弦长，且弧长/弦长不超过 π/2。", Toast.LENGTH_LONG).show()
                     return@setPositiveButton
                 }
                 val factor = arcMm / chordMm
+                val estimatedRadiusMm = estimateCircularArcRadius(chordMm, arcMm)
                 val prefs = getSharedPreferences("brow_curvature_samples", Context.MODE_PRIVATE)
                 val old = org.json.JSONArray(prefs.getString("records", "[]"))
                 val enteredCaseId = caseIdField.text.toString().trim().ifBlank { currentCaseId.take(8) }
@@ -932,6 +933,7 @@ class MainActivity : AppCompatActivity() {
                     put("arc_mm", arcMm.toDouble())
                     put("chord_mm", chordMm.toDouble())
                     put("factor", factor.toDouble())
+                    put("estimated_radius_mm", estimatedRadiusMm?.toDouble() ?: org.json.JSONObject.NULL)
                     put("timestamp", System.currentTimeMillis())
                 }
                 old.put(item)
@@ -948,10 +950,33 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     "该区域已记录 ${samples.size} 条样本。建议至少采集 30–50 个不同顾客的标准化记录，再评估区间稳定性。"
                 }
-                Toast.makeText(this, "实测修正系数 k = ${"%.3f".format(factor)}。\n" + interval, Toast.LENGTH_LONG).show()
+                val radiusText = if (estimatedRadiusMm == null) {
+                    "半径估计不稳定，可能接近平坦"
+                } else {
+                    "局部圆弧近似半径 R≈${"%.1f".format(estimatedRadiusMm)} mm，曲率约 ${"%.5f".format(1f / estimatedRadiusMm)} mm⁻¹"
+                }
+                Toast.makeText(this, "实测修正系数 k = ${"%.3f".format(factor)}。\n" + radiusText + "\n" + interval, Toast.LENGTH_LONG).show()
             }
             .setNeutralButton("导出 CSV") { _, _ -> exportCurvatureCsv() }
             .show()
+    }
+
+    private fun estimateCircularArcRadius(chordMm: Float, arcMm: Float): Float? {
+        val ratio = arcMm / chordMm
+        if (ratio <= 1.00005f) return null
+        var low = 0.0001
+        var high = Math.PI
+        repeat(80) {
+            val theta = (low + high) / 2.0
+            val value = theta / (2.0 * kotlin.math.sin(theta / 2.0))
+            if (value < ratio.toDouble()) low = theta else high = theta
+        }
+        val theta = (low + high) / 2.0
+        val denominator = 2.0 * kotlin.math.sin(theta / 2.0)
+        if (denominator <= 0.0) return null
+        val radius = chordMm / denominator
+        if (!radius.isFinite() || radius > 1_000_000.0) return null
+        return radius.toFloat()
     }
 
     private fun exportCurvatureCsv() {
@@ -961,14 +986,16 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val csv = buildString {
-            append("case_id,region,arc_mm,chord_mm,correction_factor,timestamp\n")
+            append("case_id,region,arc_mm,chord_mm,correction_factor,estimated_radius_mm,timestamp\n")
             for (i in 0 until records.length()) {
                 val row = records.optJSONObject(i) ?: continue
                 append(row.optString("case_id")).append(',')
                 append(row.optString("region")).append(',')
                 append(row.optDouble("arc_mm")).append(',')
                 append(row.optDouble("chord_mm")).append(',')
+                val radius = row.optDouble("estimated_radius_mm", Double.NaN)
                 append(row.optDouble("factor")).append(',')
+                append(if (radius.isFinite()) radius else "").append(',')
                 append(row.optLong("timestamp")).append('\n')
             }
         }
