@@ -2213,6 +2213,189 @@ private object BrowRenderer {
         )
     }
 
+    fun extractNativeContours(result: BrowSegmentationResult): List<NativeBrowContour> {
+        val mask = result.overlay
+        if (mask.isRecycled || result.regions.isEmpty()) return emptyList()
+        val extracted = mutableListOf<NativeBrowContour>()
+        result.regions.forEachIndexed { regionIndex, bounds ->
+            if (bounds.size < 4) return@forEachIndexed
+            val x0 = bounds[0]
+            val y0 = bounds[1]
+            val x1 = bounds[2]
+            val y1 = bounds[3]
+            val width = x1 - x0
+            if (width < 8 || y1 <= y0) return@forEachIndexed
+            val topAll = FloatArray(width) { Float.NaN }
+            val bottomAll = FloatArray(width) { Float.NaN }
+            for (dx in 0 until width) {
+                val sx = x0 + dx
+                val mx = sx - result.offsetX
+                if (mx !in 0 until mask.width) continue
+                var minY = Int.MAX_VALUE
+                var maxY = Int.MIN_VALUE
+                var count = 0
+                for (sy in y0 until y1) {
+                    val my = sy - result.offsetY
+                    if (my !in 0 until mask.height) continue
+                    if (Color.alpha(mask.getPixel(mx, my)) >= 80) {
+                        minY = min(minY, sy)
+                        maxY = max(maxY, sy)
+                        count++
+                    }
+                }
+                if (count >= 2 && minY <= maxY) {
+                    topAll[dx] = minY.toFloat()
+                    bottomAll[dx] = maxY.toFloat()
+                }
+            }
+            val validIndices = topAll.indices.filter { topAll[it].isFinite() && bottomAll[it].isFinite() }
+            if (validIndices.size < max(8, width / 12)) return@forEachIndexed
+            val first = validIndices.first()
+            val last = validIndices.last()
+            val top = topAll.copyOfRange(first, last + 1)
+            val bottom = bottomAll.copyOfRange(first, last + 1)
+            fun fillGaps(values: FloatArray) {
+                val nextValid = IntArray(values.size) { -1 }
+                var next = -1
+                for (i in values.indices.reversed()) {
+                    if (values[i].isFinite()) next = i
+                    nextValid[i] = next
+                }
+                var previous = -1
+                for (i in values.indices) {
+                    if (values[i].isFinite()) {
+                        previous = i
+                        continue
+                    }
+                    val following = nextValid[i]
+                    values[i] = when {
+                        previous < 0 && following >= 0 -> values[following]
+                        following < 0 && previous >= 0 -> values[previous]
+                        previous >= 0 && following >= 0 -> {
+                            val t = (i - previous).toFloat() / (following - previous).coerceAtLeast(1)
+                            values[previous] + (values[following] - values[previous]) * t
+                        }
+                        else -> 0f
+                    }
+                }
+            }
+            fillGaps(top)
+            fillGaps(bottom)
+            val smoothedTop = FloatArray(top.size)
+            val smoothedBottom = FloatArray(bottom.size)
+            for (i in top.indices) {
+                var topSum = 0f
+                var bottomSum = 0f
+                var count = 0
+                for (j in max(0, i - 2)..min(top.lastIndex, i + 2)) {
+                    topSum += top[j]
+                    bottomSum += bottom[j]
+                    count++
+                }
+                val center = (topSum / count + bottomSum / count) / 2f
+                val half = max(0.75f, abs(bottomSum / count - topSum / count) / 2f)
+                smoothedTop[i] = center - half
+                smoothedBottom[i] = center + half
+            }
+            extracted.add(
+                NativeBrowContour(
+                    regionIndex = regionIndex,
+                    xStart = x0 + first,
+                    top = smoothedTop,
+                    bottom = smoothedBottom,
+                    regionBounds = bounds.copyOf()
+                )
+            )
+        }
+        return extracted
+    }
+
+    fun drawNativeContours(
+        canvas: Canvas,
+        contours: List<NativeBrowContour>,
+        landmarks: List<PointF>,
+        params: BrowParams,
+        scale: Float = 1f,
+        imageLeft: Float = 0f,
+        imageTop: Float = 0f,
+        outlineOnly: Boolean = false,
+        curvatureFactors: Map<String, Float> = emptyMap()
+    ) {
+        if (contours.isEmpty()) return
+        val noseX = landmarks.getOrNull(1)?.x ?: landmarks.map { it.x }.average().toFloat()
+        contours.forEach { contour ->
+            val width = min(contour.top.size, contour.bottom.size)
+            if (width < 8) return@forEach
+            val imageCenterX = contour.xStart + (width - 1) / 2f
+            val anatomicalRight = imageCenterX < noseX
+            val segmentNames = if (anatomicalRight) {
+                listOf("右眉尾", "右眉峰", "右眉身", "右眉头")
+            } else {
+                listOf("左眉头", "左眉身", "左眉峰", "左眉尾")
+            }
+            val cumulative = FloatArray(width)
+            cumulative[0] = 0f
+            for (i in 1 until width) {
+                val t = (i - 0.5f) / (width - 1).coerceAtLeast(1)
+                val segment = min(3, (t * 4f).toInt())
+                val factor = (curvatureFactors[segmentNames[segment]] ?: 1f).coerceIn(1f, 1.4f)
+                cumulative[i] = cumulative[i - 1] + factor
+            }
+            val cumulativeCenter = (cumulative.first() + cumulative.last()) / 2f
+            val displaySpan = max(1f, cumulative.last() * params.length)
+            val topPathPoints = ArrayList<PointF>(width)
+            val bottomPathPoints = ArrayList<PointF>(width)
+            for (i in 0 until width) {
+                val t = i.toFloat() / (width - 1).coerceAtLeast(1)
+                val x = imageCenterX + (cumulative[i] - cumulativeCenter) * params.length
+                val upper = contour.top[i]
+                val lower = contour.bottom[i]
+                val centerY = (upper + lower) / 2f
+                val halfThickness = max(0.7f, abs(lower - upper) * 0.5f * params.thickness)
+                val archDelta = displaySpan * 0.075f * (params.arch - 1f) * 4f * t * (1f - t)
+                val xOnCanvas = imageLeft + x * scale
+                val upperOnCanvas = imageTop + (centerY - halfThickness - archDelta) * scale
+                val lowerOnCanvas = imageTop + (centerY + halfThickness - archDelta) * scale
+                topPathPoints.add(PointF(xOnCanvas, upperOnCanvas))
+                bottomPathPoints.add(PointF(xOnCanvas, lowerOnCanvas))
+            }
+            val path = Path()
+            path.moveTo(topPathPoints.first().x, topPathPoints.first().y)
+            topPathPoints.drop(1).forEach { path.lineTo(it.x, it.y) }
+            bottomPathPoints.asReversed().forEach { path.lineTo(it.x, it.y) }
+            path.close()
+            if (outlineOnly) {
+                paint.shader = null
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = max(0.8f, displaySpan * scale * 0.003f)
+                paint.strokeJoin = Paint.Join.ROUND
+                paint.strokeCap = Paint.Cap.ROUND
+                paint.color = Color.BLACK
+                canvas.drawPath(path, paint)
+                paint.style = Paint.Style.FILL
+                paint.strokeWidth = 1f
+                return@forEach
+            }
+            val colors = when (params.style) {
+                1 -> intArrayOf(Color.argb(140, 94, 65, 51), Color.argb(165, 112, 77, 59))
+                2 -> intArrayOf(Color.argb(175, 45, 29, 22), Color.argb(210, 55, 34, 25))
+                else -> intArrayOf(Color.argb(150, 76, 48, 34), Color.argb(185, 92, 58, 40))
+            }
+            paint.style = Paint.Style.FILL
+            paint.shader = LinearGradient(
+                topPathPoints.first().x,
+                topPathPoints.minOf { it.y },
+                topPathPoints.last().x,
+                bottomPathPoints.maxOf { it.y },
+                colors[0],
+                colors[1],
+                Shader.TileMode.CLAMP
+            )
+            canvas.drawPath(path, paint)
+            paint.shader = null
+        }
+    }
+
     fun pupilDistance(points: List<PointF>): Float {
         // Do not silently substitute eye-corner distance for interpupillary distance:
         // that would introduce a systematic physical print-scale error.
