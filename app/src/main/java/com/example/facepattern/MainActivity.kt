@@ -1562,7 +1562,7 @@ class MainActivity : AppCompatActivity() {
                     if (curvatureCorrected) {
                         canvas.drawText(
                             "区域长度修正已启用（实验性）",
-                            content.centerX(),
+                            content.exactCenterX(),
                             boxTop + calibrationPts + 20f,
                             labelPaint
                         )
