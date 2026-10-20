@@ -75,10 +75,13 @@ and `k = s / c`. Real brow ridges are not perfect circular arcs, and a single fr
 
 ## 4. Brow-region segmentation
 
-The Android app has two modes:
+The Android app supports three segmentation paths, in this priority order:
 
-- **Adaptive contrast pre-segmentation** is available immediately, without a trained model. It estimates dark eyebrow pixels from local luminance around the face-landmark brow ROI and provides a sensitivity slider, an overlay, and touch brushes to add/remove pixels. It is a convenient starting mask, not a validated precise segmenter.
-- **Optional learned segmentation** is activated when `app/src/main/assets/brow_segmentation.tflite` is present and the model has the expected float32 input `[1,256,256,3]` (RGB normalized to 0–1) and output `[1,256,256,1]` (sigmoid probabilities). The app falls back safely if this model is absent or incompatible.
+- **Customer trained eyebrow model**: when `app/src/main/assets/brow_segmentation.tflite` exists and matches float32 input `[1,256,256,3]` (RGB normalized to 0–1) and output `[1,256,256,1]` (sigmoid probabilities), it is preferred. This is the model produced by the training script below.
+- **Built in BiSeNet face parsing model**: the Android CI build downloads `faceparsing.tflite` from [LiteRT Community](https://huggingface.co/litert-community/BiSeNet-Face-Parsing-LiteRT). It consumes float32 `[1,3,512,512]` NCHW RGB with ImageNet mean/std normalization and outputs `[1,19,512,512]` logits. Class 2 is the left eyebrow and class 3 is the right eyebrow. The APK grows by approximately 53 MB for this asset.
+- **Adaptive contrast fallback**: if neither model can be loaded or inference returns almost no brow pixels, the app estimates dark eyebrow pixels around the brow landmarks. It remains manually editable and is not a precise segmentation guarantee.
+
+**Important model license caveat:** the LiteRT model card marks the converted model MIT, but its weights come from a face parsing model trained using the CelebAMask-HQ class taxonomy/dataset. The original dataset agreement restricts commercial use of dataset images and derived data to non-commercial research/education. For paid salon/client workflows, obtain explicit rights-holder permission or replace these weights with a model whose training-data and weight licences expressly permit the intended use. See [docs/MODEL_PROVENANCE.md](../docs/MODEL_PROVENANCE.md).
 
 ### Collect and annotate data
 
@@ -102,7 +105,7 @@ python ml/train_brow_segmentation.py --dataset /local/brow_dataset --output ml/a
 
 The second command only copies the model to app assets if the untouched grouped test Dice is at least 0.70. The model-selection validation split is separate from this test split, so the final test cases are not used for early stopping. Passing this internal gate still does not mean the model is commercially validated. The training script uses a compact U-Net, binary-cross-entropy plus Dice loss, aligned paired augmentations, and three case-grouped partitions for training, early-stopping validation and final internal testing. It refuses to train fewer than 50 distinct cases by default. This is only an initial exploratory floor, not a sufficient commercial sample-size claim. Review the masks and test examples, including false positives and false negatives, before committing a model. Validate on independently collected clients, skin tones, makeup, lighting and camera conditions and then on the target Android device.
 
-No trained brow-segmentation model is shipped in this repository because no authorized, professionally annotated dataset was supplied. The application therefore uses the adaptive pre-segmentation fallback until a compatible trained model is added.
+No customer-specific eyebrow segmentation model is shipped because no authorized, professionally annotated client dataset was supplied. The CI build downloads a general face parsing candidate for technical testing. This does not mean it has been validated on salon clients or that its upstream data terms are cleared for paid use.
 
 ## 5. Regional curvature correction in printing
 
@@ -113,6 +116,6 @@ This correction is a regional length adjustment. It is not full 3D reconstructio
 ## 6. Remaining production gates
 
 - No trained ranking model is present until real feedback data is collected and a model JSON is generated.
-- No trained segmentation model is present until authorized images and professionally reviewed masks are collected.
+- No customer-specific segmentation model is present until authorized images and professionally reviewed masks are collected. The current build includes a generic pretrained model candidate, subject to the licensing note above.
 - The experimental regional correction must be evaluated against a measured surface model and physical stencil transfer, with print-scale checks on each printer model.
 - The Android app must complete OPPO Find X7 and target-printer field tests, crash/memory checks, and a signed release build.
