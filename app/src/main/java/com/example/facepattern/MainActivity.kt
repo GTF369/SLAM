@@ -85,7 +85,12 @@ private data class BrowParams(
     val style: Int = 0
 )
 
-private data class BrowPlan(val name: String, val params: BrowParams)
+private data class BrowPlan(
+    val name: String,
+    val params: BrowParams,
+    val useNativeShape: Boolean = false,
+    val segmentationSnapshot: BrowSegmentationResult? = null
+)
 
 class MainActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
@@ -120,6 +125,7 @@ class MainActivity : AppCompatActivity() {
     private val history = mutableListOf<BrowParams>()
     private val savedPlans = mutableListOf<BrowPlan>()
     private var transitionAnimator: ValueAnimator? = null
+    private var useNativeShape = false
     private var segmentationResult: BrowSegmentationResult? = null
     private var showNativeSegmentation = false
     private var segmentationSensitivity = 0.72f
@@ -246,6 +252,10 @@ class MainActivity : AppCompatActivity() {
                 toggleNativeSegmentation()
             },
             "完成修正" to { browView.setSegmentationEditMode(false) }
+        ))
+        addButtonRow(designControls, listOf(
+            "以原生眉形作底稿" to { toggleNativeShapeDesign() },
+            "使用参数化底稿" to { toggleNativeShapeDesign(forceOff = true) }
         ))
         thicknessSeek = addSlider(designControls, "粗细", 100, 50) { p ->
             params = params.copy(thickness = 0.55f + p / 100f * 0.90f)
@@ -762,9 +772,14 @@ class MainActivity : AppCompatActivity() {
         stopTransition()
         currentCaseId = UUID.randomUUID().toString().take(8)
         segmentationGeneration++
+        savedPlans.forEach { it.segmentationSnapshot?.overlay?.recycle() }
+        savedPlans.clear()
+        if (::plansRow.isInitialized) refreshPlanButtons()
         segmentationResult?.overlay?.recycle()
         segmentationResult = null
         showNativeSegmentation = false
+        useNativeShape = false
+        browView.setNativeShapeMode(false)
         if (::segmentationLabel.isInitialized) segmentationLabel.text = "原生眉区识别：尚未运行"
         // Do not carry one customer's candidate plans into the next customer's session.
         savedPlans.clear()
@@ -797,6 +812,8 @@ class MainActivity : AppCompatActivity() {
         segmentationResult?.overlay?.recycle()
         segmentationResult = null
         showNativeSegmentation = false
+        useNativeShape = false
+        browView.setNativeShapeMode(false)
         if (::segmentationLabel.isInitialized) segmentationLabel.text = "原生眉区识别：尚未运行"
         browView.setSegmentationResult(null, false)
         designMode = false
