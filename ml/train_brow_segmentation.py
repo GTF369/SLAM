@@ -54,17 +54,33 @@ def load_samples(root: Path, rows: list[dict[str, str]]) -> tuple[np.ndarray, np
     return np.stack(images), np.stack(masks), np.asarray(groups)
 
 
-def group_split(groups: np.ndarray, seed: int, test_fraction: float = 0.2) -> tuple[np.ndarray, np.ndarray]:
+def grouped_train_val_test_split(
+    groups: np.ndarray,
+    seed: int,
+    validation_fraction: float = 0.15,
+    test_fraction: float = 0.15,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Split by customer case, leaving test cases untouched by model selection."""
     unique = sorted(set(groups.tolist()))
+    if len(unique) < 3:
+        raise SystemExit("At least three distinct case IDs are needed for grouped splitting.")
     rng = random.Random(seed)
     rng.shuffle(unique)
     n_test = max(1, int(round(len(unique) * test_fraction)))
+    n_val = max(1, int(round(len(unique) * validation_fraction)))
+    if n_test + n_val >= len(unique):
+        raise SystemExit("Not enough distinct cases for separate train/validation/test groups.")
+
     test_cases = set(unique[:n_test])
+    validation_cases = set(unique[n_test:n_test + n_val])
+    train_cases = set(unique[n_test + n_val:])
+
+    train_indices = np.asarray([i for i, group in enumerate(groups) if group in train_cases], dtype=np.int64)
+    validation_indices = np.asarray([i for i, group in enumerate(groups) if group in validation_cases], dtype=np.int64)
     test_indices = np.asarray([i for i, group in enumerate(groups) if group in test_cases], dtype=np.int64)
-    train_indices = np.asarray([i for i, group in enumerate(groups) if group not in test_cases], dtype=np.int64)
-    if not len(train_indices) or not len(test_indices):
-        raise SystemExit("Could not create a case-grouped holdout split.")
-    return train_indices, test_indices
+    if not len(train_indices) or not len(validation_indices) or not len(test_indices):
+        raise SystemExit("Could not create non-empty case-grouped train/validation/test splits.")
+    return train_indices, validation_indices, test_indices
 
 
 def dice_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -133,9 +149,9 @@ def main() -> None:
     parser.add_argument("--min-cases", type=int, default=50,
                         help="Minimum distinct annotated cases for an exploratory model. Does not imply production readiness.")
     parser.add_argument("--promote-to-app", action="store_true",
-                        help="Copy candidate into app assets only when the grouped holdout Dice meets the threshold.")
-    parser.add_argument("--min-validation-dice", type=float, default=0.70,
-                        help="Minimum grouped holdout Dice required for --promote-to-app.")
+                        help="Copy candidate into app assets only when the untouched grouped test Dice meets the threshold.")
+    parser.add_argument("--min-test-dice", "--min-validation-dice", dest="min_test_dice", type=float, default=0.70,
+                        help="Minimum untouched grouped test Dice required for --promote-to-app.")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -150,9 +166,18 @@ def main() -> None:
             "Use consented, manually reviewed labels. Small-sample experiments require an explicit lower threshold and are not production models."
         )
 
-    train_idx, test_idx = group_split(groups, args.seed)
+    train_idx, val_idx, test_idx = grouped_train_val_test_split(groups, args.seed)
     x_train, y_train = x[train_idx], y[train_idx]
+    x_val, y_val = x[val_idx], y[val_idx]
     x_test, y_test = x[test_idx], y[test_idx]
+
+    # Guard against any customer-level leakage across the three partitions.
+    train_cases = set(groups[train_idx].tolist())
+    val_cases = set(groups[val_idx].tolist())
+    test_cases = set(groups[test_idx].tolist())
+    assert train_cases.isdisjoint(val_cases)
+    assert train_cases.isdisjoint(test_cases)
+    assert val_cases.isdisjoint(test_cases)
 
     # Apply geometric augmentation to both image and mask so supervision remains aligned.
     def augment_pair(image, mask):
@@ -181,7 +206,7 @@ def main() -> None:
     ]
     history = model.fit(
         train_ds,
-        validation_data=(x_test, y_test),
+        validation_data=(x_val, y_val),
         epochs=args.epochs,
         callbacks=callbacks,
         verbose=2,
@@ -192,14 +217,17 @@ def main() -> None:
         "input_shape": [1, IMAGE_SIZE, IMAGE_SIZE, 3],
         "output_shape": [1, IMAGE_SIZE, IMAGE_SIZE, 1],
         "distinct_cases": len(unique_cases),
-        "train_cases": len(set(groups[train_idx].tolist())),
-        "validation_cases": len(set(groups[test_idx].tolist())),
+        "train_cases": len(train_cases),
+        "validation_cases": len(val_cases),
+        "test_cases": len(test_cases),
         "train_rois": int(len(train_idx)),
-        "validation_rois": int(len(test_idx)),
-        "validation_dice": dice_score(y_test, predicted),
-        "validation_iou": iou_score(y_test, predicted),
+        "validation_rois": int(len(val_idx)),
+        "test_rois": int(len(test_idx)),
+        "test_dice": dice_score(y_test, predicted),
+        "test_iou": iou_score(y_test, predicted),
         "best_validation_loss": float(min(history.history.get("val_loss", [float("nan")]))),
-        "warning": "Grouped internal holdout only. Independent prospective validation and target-device testing are required before commercial use.",
+        "evaluation": "Untouched grouped test split, separated from train and early-stopping validation.",
+        "warning": "Internal grouped test only. A separately collected prospective client set and target-device testing are required before practical reliance."
     }
 
     # The Android runtime expects float32 RGB [0,1] input and a float32
@@ -214,10 +242,10 @@ def main() -> None:
     print(json.dumps(metrics, indent=2))
     print(f"Candidate TFLite model written to {args.output}")
     if args.promote_to_app:
-        if metrics["validation_dice"] < args.min_validation_dice:
+        if metrics["test_dice"] < args.min_test_dice:
             raise SystemExit(
-                f"Model not promoted: grouped validation Dice={metrics['validation_dice']:.3f} "
-                f"is below --min-validation-dice={args.min_validation_dice:.3f}. "
+                f"Model not promoted: untouched grouped test Dice={metrics['test_dice']:.3f} "
+                f"is below --min-test-dice={args.min_test_dice:.3f}. "
                 "Review annotations and collect more consented cases."
             )
         app_path = Path("app/src/main/assets/brow_segmentation.tflite")
@@ -227,7 +255,7 @@ def main() -> None:
         print("This is not a production release. Independent client and target-device validation remains required.")
     else:
         print("Candidate was not added to the app. Review the metric JSON and validation examples first.")
-    print("Do not treat the grouped holdout score as proof of clinical, demographic, or commercial generalization.")
+    print("Do not treat the grouped test score as proof of generalization across salons, camera devices, lighting, skin tones, makeup, or brow styles.")
 
 
 if __name__ == "__main__":
