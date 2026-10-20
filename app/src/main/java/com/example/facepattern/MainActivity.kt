@@ -447,7 +447,7 @@ class MainActivity : AppCompatActivity() {
         if (captureInProgress) return
         AlertDialog.Builder(this)
             .setTitle("顾客拍摄与数据使用确认")
-            .setMessage("请先向顾客说明并取得同意。照片会在本机内存中用于眉形设计，当前原型不会上传照片。点击“保存效果图”会将包含面部的设计图写入手机相册。曲率和偏好记录不包含姓名等身份字段。")
+            .setMessage("请先向顾客说明并取得同意。照片会在本机内存中用于眉形设计，当前原型不会上传照片。点击“保存效果图”会将包含面部的设计图写入手机相册。满意度、方案偏好和曲率数据会以匿名编号保存在本机，并可在取得同意后导出用于算法研究，不会自动上传。")
             .setNegativeButton("取消", null)
             .setPositiveButton("同意并拍照") { _, _ -> captureHighResolutionPhoto() }
             .show()
