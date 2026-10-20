@@ -996,7 +996,7 @@ class MainActivity : AppCompatActivity() {
             .setMessage("该操作会将未叠加眉形的完整人脸照片保存到手机相册，供你在获得单独明确授权后进行本地人工标注和训练。照片可识别顾客身份，请勿未经授权上传、共享或用于其他用途。")
             .setNegativeButton("取消", null)
             .setPositiveButton("保存原始照片") { _, _ ->
-                val filename = "BrowAnnotation_${currentCaseId}_${System.currentTimeMillis()}.png"
+                val filename = "${currentCaseId}_source_${System.currentTimeMillis()}.png"
                 var uri: android.net.Uri? = null
                 var output: java.io.OutputStream? = null
                 try {
