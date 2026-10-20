@@ -1,0 +1,5 @@
+# Optional dependencies for eyebrow ROI annotation and on-device segmentation model training.
+# These are separate from the lightweight curvature / ranker utilities.
+opencv-python>=4.10,<5
+tensorflow>=2.16,<2.21
+numpy>=1.26
