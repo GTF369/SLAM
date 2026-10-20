@@ -40,28 +40,57 @@ private data class FaceParsingMap(
  */
 internal object BrowSegmentationEngine {
     private const val MODEL_SIZE = 512
+    private const val CUSTOM_MODEL_SIZE = 256
     private const val PARSING_CLASSES = 19
     private val mean = floatArrayOf(0.485f, 0.456f, 0.406f)
     private val std = floatArrayOf(0.229f, 0.224f, 0.225f)
+    private enum class ModelKind { CUSTOM_BROW, BISE_NET_FACE_PARSING }
     private val browSets = listOf(
         intArrayOf(70, 63, 105, 66, 107),
         intArrayOf(300, 293, 334, 296, 336)
     )
     private var modelAttempted = false
     private var model: Interpreter? = null
+    private var modelKind: ModelKind? = null
 
     @Synchronized
     private fun loadModel(context: Context): Interpreter? {
         if (modelAttempted) return model
         modelAttempted = true
+        val assets = context.assets.list("")?.toSet().orEmpty()
+
+        // Prefer a customer-authorized fine-tuned binary eyebrow model when one
+        // is installed. Otherwise use the bundled full-face BiSeNet parser.
+        if ("brow_segmentation.tflite" in assets) {
+            var candidate: Interpreter? = null
+            try {
+                val bytes = context.assets.open("brow_segmentation.tflite").use { it.readBytes() }
+                val mapped = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder())
+                mapped.put(bytes)
+                mapped.rewind()
+                candidate = Interpreter(mapped, Interpreter.Options().setNumThreads(2))
+                val input = candidate.getInputTensor(0).shape()
+                val output = candidate.getOutputTensor(0).shape()
+                if (input.contentEquals(intArrayOf(1, CUSTOM_MODEL_SIZE, CUSTOM_MODEL_SIZE, 3)) &&
+                    output.contentEquals(intArrayOf(1, CUSTOM_MODEL_SIZE, CUSTOM_MODEL_SIZE, 1))) {
+                    model = candidate
+                    modelKind = ModelKind.CUSTOM_BROW
+                    return model
+                }
+            } catch (_: Exception) {
+                // Fall through to the whole-face parsing model if this candidate is invalid.
+            }
+            try { candidate?.close() } catch (_: Exception) {}
+        }
+
+        if ("faceparsing.tflite" !in assets) return null
+        var candidate: Interpreter? = null
         try {
-            val assets = context.assets.list("")?.toSet().orEmpty()
-            if ("faceparsing.tflite" !in assets) return null
             val bytes = context.assets.open("faceparsing.tflite").use { it.readBytes() }
             val mapped = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder())
             mapped.put(bytes)
             mapped.rewind()
-            val candidate = Interpreter(mapped, Interpreter.Options().setNumThreads(2))
+            candidate = Interpreter(mapped, Interpreter.Options().setNumThreads(2))
             val input = candidate.getInputTensor(0).shape()
             val output = candidate.getOutputTensor(0).shape()
             if (!input.contentEquals(intArrayOf(1, 3, MODEL_SIZE, MODEL_SIZE)) ||
@@ -70,9 +99,11 @@ internal object BrowSegmentationEngine {
                 return null
             }
             model = candidate
+            modelKind = ModelKind.BISE_NET_FACE_PARSING
         } catch (_: Exception) {
-            try { model?.close() } catch (_: Exception) {}
+            try { candidate?.close() } catch (_: Exception) {}
             model = null
+            modelKind = null
         }
         return model
     }
@@ -95,8 +126,13 @@ internal object BrowSegmentationEngine {
         val overlay = Bitmap.createBitmap(right - left, bottom - top, Bitmap.Config.ARGB_8888)
         val colors = IntArray(overlay.width * overlay.height)
         val loadedModel = loadModel(context)
+        val activeModelKind = modelKind
         val faceParsing = try {
-            if (loadedModel != null) predictFaceParsing(loadedModel, source, landmarks) else null
+            if (loadedModel != null && activeModelKind == ModelKind.BISE_NET_FACE_PARSING) {
+                predictFaceParsing(loadedModel, source, landmarks)
+            } else {
+                null
+            }
         } catch (_: Exception) {
             null
         }
@@ -111,20 +147,24 @@ internal object BrowSegmentationEngine {
             val x1 = bounds[2]
             val y1 = bounds[3]
             val roi = Bitmap.createBitmap(source, x0, y0, x1 - x0, y1 - y0)
-            val parsedMask = try {
-                faceParsing?.let { maskFromFaceParsing(it, bounds) }
+            val modelMask = try {
+                when (activeModelKind) {
+                    ModelKind.CUSTOM_BROW -> loadedModel?.let { predictWithCustomBrowModel(it, roi) }
+                    ModelKind.BISE_NET_FACE_PARSING -> faceParsing?.let { maskFromFaceParsing(it, bounds) }
+                    null -> null
+                }
             } catch (_: Exception) {
                 null
             }
-            val parsedPixels = parsedMask?.count { it } ?: 0
+            val modelPixels = modelMask?.count { it } ?: 0
             // A nearly empty model output can occur under makeup, harsh shadows or
             // unusual lighting. Use the editable contrast mask instead of returning
             // a blank eyebrow in that case.
-            val useParsedMask = parsedMask != null &&
-                parsedPixels >= max(5, (parsedMask.size * 0.003f).toInt())
-            val mask = if (useParsedMask) {
+            val useModelMask = modelMask != null &&
+                modelPixels >= max(5, (modelMask.size * 0.003f).toInt())
+            val mask = if (useModelMask) {
                 modelAppliedRegions++
-                parsedMask!!
+                modelMask!!
             } else {
                 adaptiveMask(roi, sensitivity)
             }
@@ -154,10 +194,15 @@ internal object BrowSegmentationEngine {
         }
         overlay.setPixels(colors, 0, overlay.width, 0, 0, overlay.width, overlay.height)
         val usedModel = modelAppliedRegions > 0
+        val modelLabel = if (activeModelKind == ModelKind.CUSTOM_BROW) {
+            "客户数据训练的眉毛分割模型"
+        } else {
+            "BiSeNet 人脸解析模型"
+        }
         val method = when {
-            modelAppliedRegions == regions.size -> "BiSeNet 人脸解析模型"
-            modelAppliedRegions > 0 -> "BiSeNet 人脸解析模型 + 对比度补底"
-            else -> "自适应对比度预分割"
+            !usedModel -> "自适应对比度预分割"
+            modelAppliedRegions == regions.size -> modelLabel
+            else -> "$modelLabel + 对比度补底"
         }
         return BrowSegmentationResult(
             overlay = overlay,
@@ -183,6 +228,41 @@ internal object BrowSegmentationEngine {
         val y0 = (valid.minOf { it.y }.toInt() - padTop).coerceIn(0, source.height - 1)
         val y1 = (valid.maxOf { it.y }.toInt() + padBottom + 1).coerceIn(y0 + 1, source.height)
         return intArrayOf(x0, y0, x1, y1)
+    }
+
+    private fun predictWithCustomBrowModel(interpreter: Interpreter, roi: Bitmap): BooleanArray {
+        val scaled = Bitmap.createScaledBitmap(roi, CUSTOM_MODEL_SIZE, CUSTOM_MODEL_SIZE, true)
+        try {
+            val input = ByteBuffer.allocateDirect(
+                CUSTOM_MODEL_SIZE * CUSTOM_MODEL_SIZE * 3 * 4
+            ).order(ByteOrder.nativeOrder())
+            val pixels = IntArray(CUSTOM_MODEL_SIZE * CUSTOM_MODEL_SIZE)
+            scaled.getPixels(pixels, 0, CUSTOM_MODEL_SIZE, 0, 0, CUSTOM_MODEL_SIZE, CUSTOM_MODEL_SIZE)
+            for (pixel in pixels) {
+                input.putFloat(Color.red(pixel) / 255f)
+                input.putFloat(Color.green(pixel) / 255f)
+                input.putFloat(Color.blue(pixel) / 255f)
+            }
+            input.rewind()
+            val output = ByteBuffer.allocateDirect(
+                CUSTOM_MODEL_SIZE * CUSTOM_MODEL_SIZE * 4
+            ).order(ByteOrder.nativeOrder())
+            interpreter.run(input, output)
+            output.rewind()
+            val probabilities = FloatArray(CUSTOM_MODEL_SIZE * CUSTOM_MODEL_SIZE) { output.float }
+            val mask = BooleanArray(roi.width * roi.height)
+            var k = 0
+            for (y in 0 until roi.height) {
+                val sy = ((y + 0.5f) * CUSTOM_MODEL_SIZE / roi.height).toInt().coerceIn(0, CUSTOM_MODEL_SIZE - 1)
+                for (x in 0 until roi.width) {
+                    val sx = ((x + 0.5f) * CUSTOM_MODEL_SIZE / roi.width).toInt().coerceIn(0, CUSTOM_MODEL_SIZE - 1)
+                    mask[k++] = probabilities[sy * CUSTOM_MODEL_SIZE + sx] >= 0.5f
+                }
+            }
+            return mask
+        } finally {
+            if (scaled !== roi && !scaled.isRecycled) scaled.recycle()
+        }
     }
 
     private fun predictFaceParsing(
@@ -338,6 +418,7 @@ internal object BrowSegmentationEngine {
         synchronized(this) {
             try { model?.close() } catch (_: Exception) {}
             model = null
+            modelKind = null
             modelAttempted = false
         }
     }
