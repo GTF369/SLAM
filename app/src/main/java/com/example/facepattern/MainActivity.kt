@@ -1273,9 +1273,8 @@ class MainActivity : AppCompatActivity() {
                 // would be incorrectly treated as independent customers.
                 val caseMeans = factorsByCase.values.map { values -> values.average().toFloat() }
                 val interval = if (caseMeans.size >= 30) {
-                    val sorted = caseMeans.sorted()
-                    val low = sorted[((sorted.size - 1) * 0.10).toInt()]
-                    val high = sorted[((sorted.size - 1) * 0.90).toInt()]
+                    val low = empiricalQuantile(caseMeans, 0.10)
+                    val high = empiricalQuantile(caseMeans, 0.90)
                     "该区域已有 ${caseMeans.size} 位不同顾客。按顾客内重复测量取均值后，样本 P10–P90 经验区间约为 ${"%.3f".format(low)}–${"%.3f".format(high)}。这是当前样本的描述性区间，不是个体预测区间，也不代表通用解剖范围。"
                 } else {
                     "该区域已有 ${caseMeans.size} 位不同顾客的记录。至少需要约 30–50 位不同顾客才能初步评估人群区间，正式应用仍需独立测量与转印验证。"
@@ -1289,6 +1288,17 @@ class MainActivity : AppCompatActivity() {
             }
             .setNeutralButton("导出 CSV") { _, _ -> exportCurvatureCsv() }
             .show()
+    }
+
+    private fun empiricalQuantile(values: List<Float>, probability: Double): Float {
+        if (values.isEmpty()) return Float.NaN
+        val sorted = values.sorted()
+        val p = probability.coerceIn(0.0, 1.0)
+        val position = (sorted.size - 1) * p
+        val lower = position.toInt()
+        val upper = min(sorted.lastIndex, lower + 1)
+        val weight = (position - lower).toFloat()
+        return sorted[lower] * (1f - weight) + sorted[upper] * weight
     }
 
     private fun estimateCircularArcRadius(chordMm: Float, arcMm: Float): Float? {
