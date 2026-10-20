@@ -936,6 +936,24 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun applyPlan(plan: BrowPlan) {
+        stopTransition()
+        history.add(params.copy())
+        segmentationResult?.overlay?.recycle()
+        segmentationResult = plan.segmentationSnapshot?.let { snapshot ->
+            if (snapshot.overlay.isRecycled) null
+            else snapshot.copy(overlay = snapshot.overlay.copy(Bitmap.Config.ARGB_8888, true))
+        }
+        showNativeSegmentation = false
+        useNativeShape = plan.useNativeShape && segmentationResult != null
+        browView.setSegmentationResult(segmentationResult, false)
+        browView.setNativeShapeMode(useNativeShape)
+        params = plan.params.copy()
+        browView.setParams(params)
+        syncSliders()
+        status.text = if (useNativeShape) "正在预览：${plan.name}（原生眉形轮廓）" else "正在预览：" + plan.name
+    }
+
     private fun refreshPlanButtons() {
         plansRow.removeAllViews()
         if (savedPlans.isEmpty()) {
@@ -947,24 +965,7 @@ class MainActivity : AppCompatActivity() {
             val b = Button(this).apply {
                 text = plan.name
                 textSize = 11f
-                setOnClickListener {
-                    stopTransition()
-                    history.add(params.copy())
-                    segmentationResult?.overlay?.recycle()
-                    segmentationResult = plan.segmentationSnapshot?.let { snapshot ->
-                        if (snapshot.overlay.isRecycled) null
-                        else snapshot.copy(overlay = snapshot.overlay.copy(Bitmap.Config.ARGB_8888, true))
-                    }
-                    showNativeSegmentation = false
-                    useNativeShape = plan.useNativeShape && segmentationResult != null
-                    browView.setSegmentationResult(segmentationResult, false)
-                    browView.setNativeShapeMode(useNativeShape)
-                    history.add(params.copy())
-                    params = plan.params.copy()
-                    browView.setParams(params)
-                    syncSliders()
-                    status.text = if (useNativeShape) "正在预览：${plan.name}（原生眉形轮廓）" else "正在预览：" + plan.name
-                }
+                setOnClickListener { applyPlan(plan) }
                 setOnLongClickListener {
                     AlertDialog.Builder(this@MainActivity)
                         .setTitle("移除方案")
@@ -1021,12 +1022,7 @@ class MainActivity : AppCompatActivity() {
             })
             column.addView(Button(this).apply {
                 text = "选用"
-                setOnClickListener {
-                    params = plan.params.copy()
-                    browView.setParams(params)
-                    syncSliders()
-                    status.text = "已选用：" + plan.name
-                }
+                setOnClickListener { applyPlan(plan) }
             })
             horizontal.addView(column, LinearLayout.LayoutParams(dp(220), -2))
         }
