@@ -47,7 +47,7 @@ Run:
 python ml/analyze_curvature.py /path/to/brow_curvature_calibration.csv --output curvature_summary.csv
 ```
 
-The report gives region-level sample size, mean, median, 10th/90th percentiles, observed range, and a bootstrap confidence interval for the sample mean. The quantile interval is descriptive, not an anatomical guarantee or individual prediction interval. Establish a standardized measurement protocol, repeatability limits, and an independent validation set before embedding any region-specific correction factors in clinical practice.
+The report gives region-level measurement count, distinct anonymous case count, mean, median, 10th/90th percentiles, observed range, a case-clustered bootstrap confidence interval for the mean, and estimated circular-arc radii when available. The P10–P90 measurement interval is descriptive, not an anatomical guarantee or individual prediction interval. The estimated radius assumes a local circular arc and is not a three-dimensional reconstruction. Establish a standardized measurement protocol, repeatability limits, and an independent validation set before embedding any region-specific correction factors in clinical practice.
 
 ## 3. Measurement geometry
 
