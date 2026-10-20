@@ -2411,7 +2411,14 @@ private object BrowRenderer {
         return hypot((leftIris.x - rightIris.x).toDouble(), (leftIris.y - rightIris.y).toDouble()).toFloat()
     }
 
-    fun renderPreview(source: Bitmap, points: List<PointF>, params: BrowParams, maxWidth: Int): Bitmap {
+    fun renderPreview(
+        source: Bitmap,
+        points: List<PointF>,
+        params: BrowParams,
+        maxWidth: Int,
+        segmentation: BrowSegmentationResult? = null,
+        useNativeShape: Boolean = false
+    ): Bitmap {
         val scale = min(1f, maxWidth.toFloat() / source.width.coerceAtLeast(1))
         val width = max(1, (source.width * scale).toInt())
         val height = max(1, (source.height * scale).toInt())
@@ -2421,9 +2428,77 @@ private object BrowRenderer {
         } finally {
             if (scaled !== source && !scaled.isRecycled) scaled.recycle()
         }
-        val scaledPoints = points.map { PointF(it.x * width / source.width, it.y * height / source.height) }
-        drawBrows(Canvas(output), scaledPoints, params)
+        if (useNativeShape && segmentation != null && !segmentation.overlay.isRecycled) {
+            val contours = extractNativeContours(segmentation)
+            if (contours.size >= 2) {
+                drawNativeContours(Canvas(output), contours, points, params, width.toFloat() / source.width)
+            } else {
+                val scaledPoints = points.map { PointF(it.x * width / source.width, it.y * height / source.height) }
+                drawBrows(Canvas(output), scaledPoints, params)
+            }
+        } else {
+            val scaledPoints = points.map { PointF(it.x * width / source.width, it.y * height / source.height) }
+            drawBrows(Canvas(output), scaledPoints, params)
+        }
         return output
+    }
+
+    fun createTemplate(
+        points: List<PointF>,
+        params: BrowParams,
+        width: Int,
+        height: Int,
+        curvatureFactors: Map<String, Float> = emptyMap(),
+        segmentation: BrowSegmentationResult? = null,
+        useNativeShape: Boolean = false
+    ): Bitmap? {
+        if (points.size < 455 || width <= 0 || height <= 0) return null
+        val contours = if (useNativeShape && segmentation != null && !segmentation.overlay.isRecycled) {
+            extractNativeContours(segmentation)
+        } else {
+            emptyList()
+        }
+        if (useNativeShape && contours.size < 2) return null
+
+        val landmarkPoints = browSets.flatMap { ids -> ids.map { index -> points.getOrNull(index) }.filterNotNull() }
+        if (landmarkPoints.isEmpty()) return null
+        val faceWidth = if (points.size > 454) abs(points[454].x - points[234].x) else width * 0.35f
+        val maxCorrection = curvatureFactors.values.maxOrNull()?.coerceIn(1f, 1.4f) ?: 1f
+        val marginX = max(8f, faceWidth * (0.06f + (maxCorrection - 1f) * 0.08f))
+        val marginY = max(8f, faceWidth * 0.11f)
+
+        val shapeLeft = if (contours.isNotEmpty()) contours.minOf { it.xStart.toFloat() }
+            else landmarkPoints.minOf { it.x }
+        val shapeRight = if (contours.isNotEmpty()) contours.maxOf { (it.xStart + it.top.size).toFloat() }
+            else landmarkPoints.maxOf { it.x }
+        val shapeTop = if (contours.isNotEmpty()) contours.minOf { it.top.minOrNull() ?: it.regionBounds[1].toFloat() }
+            else landmarkPoints.minOf { it.y }
+        val shapeBottom = if (contours.isNotEmpty()) contours.maxOf { it.bottom.maxOrNull() ?: it.regionBounds[3].toFloat() }
+            else landmarkPoints.maxOf { it.y }
+        val left = (shapeLeft - marginX).toInt().coerceIn(0, width - 1)
+        val top = (shapeTop - marginY).toInt().coerceIn(0, height - 1)
+        val right = (shapeRight + marginX).toInt().coerceIn(left + 1, width)
+        val bottom = (shapeBottom + marginY).toInt().coerceIn(top + 1, height)
+        val template = Bitmap.createBitmap(right - left, bottom - top, Bitmap.Config.ARGB_8888)
+        if (contours.isNotEmpty()) {
+            drawNativeContours(
+                Canvas(template), contours, points, params,
+                scale = 1f, imageLeft = -left.toFloat(), imageTop = -top.toFloat(),
+                outlineOnly = true, curvatureFactors = curvatureFactors
+            )
+        } else {
+            val shiftedPoints = points.map { point -> PointF(point.x - left, point.y - top) }
+            drawBrows(Canvas(template), shiftedPoints, params, outlineOnly = true, curvatureFactors = curvatureFactors)
+        }
+        // The customer-facing preview is mirrored like a selfie. Flip only the
+        // physical stencil back so left/right anatomy maps correctly on the customer.
+        val unmirrored = Bitmap.createBitmap(
+            template, 0, 0, template.width, template.height,
+            Matrix().apply { postScale(-1f, 1f, template.width / 2f, template.height / 2f) },
+            true
+        )
+        if (unmirrored !== template) template.recycle()
+        return unmirrored
     }
 
     fun createTemplate(
