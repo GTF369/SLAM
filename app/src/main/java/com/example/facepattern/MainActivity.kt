@@ -1945,7 +1945,7 @@ class MainActivity : AppCompatActivity() {
         }
         AlertDialog.Builder(this)
             .setTitle("生成 1:1 拓描模板")
-            .setMessage("打印时选择 A4 与 100% / 实际尺寸，关闭“适合页面”等自动缩放。首次把打印比例校准留空，打印后测量 20 mm 校准框，再把实际边长填入后重打并复测。")
+            .setMessage("打印时选择 A4 与 100% / 实际尺寸，关闭“适合页面”等自动缩放。模板附虹膜中心定位十字，供辅助核对眉形相对眼部的位置。首次把打印比例校准留空，打印后测量 20 mm 校准框，再把实际边长填入后重打并复测。")
             .setView(form)
             .setNegativeButton("取消", null)
             .setPositiveButton("生成打印模板") { _, _ ->
@@ -3141,19 +3141,49 @@ private object BrowRenderer {
         }
     }
 
-    fun pupilDistance(points: List<PointF>): Float {
-        // Do not silently substitute eye-corner distance for interpupillary distance:
-        // that would introduce a systematic physical print-scale error.
-        if (points.size < 478) return 0f
+    fun pupilCenters(points: List<PointF>): List<PointF> {
+        if (points.size < 478) return emptyList()
         fun average(indices: IntRange): PointF {
             var x = 0f
             var y = 0f
             indices.forEach { x += points[it].x; y += points[it].y }
             return PointF(x / indices.count(), y / indices.count())
         }
-        val leftIris = average(468..472)
-        val rightIris = average(473..477)
-        return hypot((leftIris.x - rightIris.x).toDouble(), (leftIris.y - rightIris.y).toDouble()).toFloat()
+        return listOf(average(468..472), average(473..477))
+    }
+
+    fun pupilDistance(points: List<PointF>): Float {
+        // Do not silently substitute eye-corner distance for interpupillary distance:
+        // that would introduce a systematic physical print-scale error.
+        val centers = pupilCenters(points)
+        if (centers.size != 2) return 0f
+        return distance(centers[0], centers[1])
+    }
+
+    private fun drawPupilReferenceMarks(
+        canvas: Canvas,
+        points: List<PointF>,
+        cropLeft: Int,
+        cropTop: Int,
+        faceWidth: Float
+    ) {
+        val centers = pupilCenters(points)
+        if (centers.size != 2) return
+        val radius = max(2f, faceWidth * 0.012f)
+        val circleRadius = max(1f, faceWidth * 0.005f)
+        val markerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            style = Paint.Style.STROKE
+            strokeWidth = max(1f, faceWidth * 0.0025f)
+            strokeCap = Paint.Cap.SQUARE
+        }
+        centers.forEach { center ->
+            val x = center.x - cropLeft
+            val y = center.y - cropTop
+            canvas.drawLine(x - radius, y, x + radius, y, markerPaint)
+            canvas.drawLine(x, y - radius, x, y + radius, markerPaint)
+            canvas.drawCircle(x, y, circleRadius, markerPaint)
+        }
     }
 
     fun renderPreview(
@@ -3231,10 +3261,13 @@ private object BrowRenderer {
         }
         val transformedShapePoints = placementBoundsPoints(rawShapePoints, points, params)
         if (transformedShapePoints.isEmpty()) return null
-        val shapeLeft = transformedShapePoints.minOf { it.x }
-        val shapeRight = transformedShapePoints.maxOf { it.x }
-        val shapeTop = transformedShapePoints.minOf { it.y }
-        val shapeBottom = transformedShapePoints.maxOf { it.y }
+        // Keep untransformed iris-center fiducials in the print crop. They preserve
+        // the brow group's position relative to the face when a manual offset is used.
+        val printableBoundsPoints = transformedShapePoints + pupilCenters(points)
+        val shapeLeft = printableBoundsPoints.minOf { it.x }
+        val shapeRight = printableBoundsPoints.maxOf { it.x }
+        val shapeTop = printableBoundsPoints.minOf { it.y }
+        val shapeBottom = printableBoundsPoints.maxOf { it.y }
         val left = (shapeLeft - marginX).toInt().coerceIn(0, width - 1)
         val top = (shapeTop - marginY).toInt().coerceIn(0, height - 1)
         val right = (shapeRight + marginX).toInt().coerceIn(left + 1, width)
@@ -3250,6 +3283,7 @@ private object BrowRenderer {
             val shiftedPoints = points.map { point -> PointF(point.x - left, point.y - top) }
             drawBrows(Canvas(template), shiftedPoints, params, outlineOnly = true, curvatureFactors = curvatureFactors)
         }
+        drawPupilReferenceMarks(Canvas(template), points, left, top, faceWidth)
         // The customer-facing preview is mirrored like a selfie. Flip only the
         // physical stencil back so left/right anatomy maps correctly on the customer.
         val unmirrored = Bitmap.createBitmap(
