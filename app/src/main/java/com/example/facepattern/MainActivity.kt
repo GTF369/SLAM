@@ -2757,13 +2757,14 @@ private object BrowRenderer {
     }
 
     private fun placementBoundsPoints(
-        points: List<PointF>,
+        shapePoints: List<PointF>,
+        landmarks: List<PointF>,
         params: BrowParams
     ): List<PointF> {
-        if (points.size <= 454) return points
-        val faceWidth = distance(points[234], points[454]).coerceAtLeast(1f)
-        val pivot = pivotForBrows(points)
-        return points.map { transformPointForPlacement(it, pivot, faceWidth, params) }
+        if (landmarks.size <= 454 || shapePoints.isEmpty()) return shapePoints
+        val faceWidth = distance(landmarks[234], landmarks[454]).coerceAtLeast(1f)
+        val pivot = pivotForBrows(landmarks)
+        return shapePoints.map { transformPointForPlacement(it, pivot, faceWidth, params) }
     }
 
     fun drawBrows(
@@ -3172,19 +3173,34 @@ private object BrowRenderer {
 
         val landmarkPoints = browSets.flatMap { ids -> ids.map { index -> points.getOrNull(index) }.filterNotNull() }
         if (landmarkPoints.isEmpty()) return null
-        val faceWidth = if (points.size > 454) abs(points[454].x - points[234].x) else width * 0.35f
+        val faceWidth = if (points.size > 454) distance(points[454], points[234]) else width * 0.35f
         val maxCorrection = curvatureFactors.values.maxOrNull()?.coerceIn(1f, 1.4f) ?: 1f
-        val marginX = max(8f, faceWidth * (0.06f + (maxCorrection - 1f) * 0.08f))
-        val marginY = max(8f, faceWidth * 0.11f)
-
-        val shapeLeft = if (contours.isNotEmpty()) contours.minOf { it.xStart.toFloat() }
-            else landmarkPoints.minOf { it.x }
-        val shapeRight = if (contours.isNotEmpty()) contours.maxOf { (it.xStart + it.top.size).toFloat() }
-            else landmarkPoints.maxOf { it.x }
-        val shapeTop = if (contours.isNotEmpty()) contours.minOf { it.top.minOrNull() ?: it.regionBounds[1].toFloat() }
-            else landmarkPoints.minOf { it.y }
-        val shapeBottom = if (contours.isNotEmpty()) contours.maxOf { it.bottom.maxOrNull() ?: it.regionBounds[3].toFloat() }
-            else landmarkPoints.maxOf { it.y }
+        // Expand the crop to include manual translation, rotation and scale, not just
+        // the original face landmarks. Otherwise the preview could look correct while
+        // the printed stencil silently clips a moved brow.
+        val transformMargin = abs(params.placementScale - 1f) * 0.12f +
+            (abs(params.rotationDegrees) / 25f).coerceIn(0f, 1f) * 0.07f
+        val marginX = max(8f, faceWidth * (0.08f + (maxCorrection - 1f) * 0.08f + transformMargin))
+        val marginY = max(8f, faceWidth * (0.12f + transformMargin))
+        val rawShapePoints = if (contours.isNotEmpty()) {
+            contours.flatMap { contour ->
+                val contourWidth = min(contour.top.size, contour.bottom.size)
+                (0 until contourWidth).flatMap { index ->
+                    listOf(
+                        PointF((contour.xStart + index).toFloat(), contour.top[index]),
+                        PointF((contour.xStart + index).toFloat(), contour.bottom[index])
+                    )
+                }
+            }
+        } else {
+            landmarkPoints
+        }
+        val transformedShapePoints = placementBoundsPoints(rawShapePoints, points, params)
+        if (transformedShapePoints.isEmpty()) return null
+        val shapeLeft = transformedShapePoints.minOf { it.x }
+        val shapeRight = transformedShapePoints.maxOf { it.x }
+        val shapeTop = transformedShapePoints.minOf { it.y }
+        val shapeBottom = transformedShapePoints.maxOf { it.y }
         val left = (shapeLeft - marginX).toInt().coerceIn(0, width - 1)
         val top = (shapeTop - marginY).toInt().coerceIn(0, height - 1)
         val right = (shapeRight + marginX).toInt().coerceIn(left + 1, width)
