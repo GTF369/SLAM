@@ -11,8 +11,8 @@ android {
         applicationId = "com.example.facepattern"
         minSdk = 24
         targetSdk = 36
-        versionCode = 12
-        versionName = "0.9.3"
+        versionCode = 13
+        versionName = "0.9.4"
         // Self-use target: OPPO Find X7 / modern ARM64 Android phones.
         // Keeping only this ABI avoids bundling unused x86 and 32-bit native runtimes.
         ndk {
