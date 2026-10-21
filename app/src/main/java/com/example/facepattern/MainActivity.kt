@@ -2704,6 +2704,68 @@ private object BrowRenderer {
     )
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
+    private fun distance(a: PointF, b: PointF): Float =
+        hypot((a.x - b.x).toDouble(), (a.y - b.y).toDouble()).toFloat()
+
+    private fun pivotForBrows(points: List<PointF>): PointF {
+        val ids = browSets.flatten().distinct().filter { it in points.indices }
+        if (ids.isEmpty()) return PointF(
+            points.map { it.x }.average().toFloat(),
+            points.map { it.y }.average().toFloat()
+        )
+        return PointF(
+            ids.map { points[it].x }.average().toFloat(),
+            ids.map { points[it].y }.average().toFloat()
+        )
+    }
+
+    private fun transformPointForPlacement(
+        point: PointF,
+        pivot: PointF,
+        faceWidth: Float,
+        params: BrowParams
+    ): PointF {
+        val scale = params.placementScale.coerceIn(0.75f, 1.25f)
+        val radians = Math.toRadians(params.rotationDegrees.toDouble())
+        val dx = (point.x - pivot.x) * scale
+        val dy = (point.y - pivot.y) * scale
+        val x = dx * kotlin.math.cos(radians) - dy * kotlin.math.sin(radians)
+        val y = dx * kotlin.math.sin(radians) + dy * kotlin.math.cos(radians)
+        return PointF(
+            pivot.x + x.toFloat() + params.offsetXRatio * faceWidth,
+            pivot.y + y.toFloat() + params.offsetYRatio * faceWidth
+        )
+    }
+
+    private fun beginPlacementTransform(
+        canvas: Canvas,
+        points: List<PointF>,
+        params: BrowParams,
+        scale: Float = 1f,
+        imageLeft: Float = 0f,
+        imageTop: Float = 0f
+    ): Int {
+        val save = canvas.save()
+        if (points.size <= 454) return save
+        val mapped = points.map { PointF(imageLeft + it.x * scale, imageTop + it.y * scale) }
+        val faceWidth = distance(mapped[234], mapped[454]).coerceAtLeast(1f)
+        val pivot = pivotForBrows(mapped)
+        canvas.translate(params.offsetXRatio * faceWidth, params.offsetYRatio * faceWidth)
+        canvas.rotate(params.rotationDegrees, pivot.x, pivot.y)
+        canvas.scale(params.placementScale, params.placementScale, pivot.x, pivot.y)
+        return save
+    }
+
+    private fun placementBoundsPoints(
+        points: List<PointF>,
+        params: BrowParams
+    ): List<PointF> {
+        if (points.size <= 454) return points
+        val faceWidth = distance(points[234], points[454]).coerceAtLeast(1f)
+        val pivot = pivotForBrows(points)
+        return points.map { transformPointForPlacement(it, pivot, faceWidth, params) }
+    }
+
     fun drawBrows(
         canvas: Canvas,
         points: List<PointF>,
@@ -2712,12 +2774,17 @@ private object BrowRenderer {
         curvatureFactors: Map<String, Float> = emptyMap()
     ) {
         if (points.size < 455) return
-        val noseX = points.getOrNull(1)?.x ?: points.map { it.x }.average().toFloat()
-        browSets.forEach { ids ->
-            val sideCenter = ids.map { index -> points.getOrNull(index) }.filterNotNull().map { it.x }.average().toFloat()
-            // The displayed selfie image is mirrored. Convert its screen side to anatomical side.
-            val anatomicalRight = sideCenter < noseX
-            drawOne(canvas, points, ids, params, outlineOnly, curvatureFactors, anatomicalRight)
+        val save = beginPlacementTransform(canvas, points, params)
+        try {
+            val noseX = points.getOrNull(1)?.x ?: points.map { it.x }.average().toFloat()
+            browSets.forEach { ids ->
+                val sideCenter = ids.map { index -> points.getOrNull(index) }.filterNotNull().map { it.x }.average().toFloat()
+                // The displayed selfie image is mirrored. Convert its screen side to anatomical side.
+                val anatomicalRight = sideCenter < noseX
+                drawOne(canvas, points, ids, params, outlineOnly, curvatureFactors, anatomicalRight)
+            }
+        } finally {
+            canvas.restoreToCount(save)
         }
     }
 
@@ -2960,8 +3027,10 @@ private object BrowRenderer {
         curvatureFactors: Map<String, Float> = emptyMap()
     ) {
         if (contours.isEmpty()) return
-        val noseX = landmarks.getOrNull(1)?.x ?: landmarks.map { it.x }.average().toFloat()
-        contours.forEach { contour ->
+        val save = beginPlacementTransform(canvas, landmarks, params, scale, imageLeft, imageTop)
+        try {
+            val noseX = landmarks.getOrNull(1)?.x ?: landmarks.map { it.x }.average().toFloat()
+            contours.forEach { contour ->
             val width = min(contour.top.size, contour.bottom.size)
             if (width < 8) return@forEach
             val imageCenterX = contour.xStart + (width - 1) / 2f
@@ -3031,6 +3100,9 @@ private object BrowRenderer {
             )
             canvas.drawPath(path, paint)
             paint.shader = null
+            }
+        } finally {
+            canvas.restoreToCount(save)
         }
     }
 
