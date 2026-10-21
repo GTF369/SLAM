@@ -2462,6 +2462,19 @@ private class BrowDesignView(context: Context) : View(context) {
     private var editSegmentationMask: Boolean = false
     private var includeEditedPixels: Boolean = true
 
+    var onTransformGestureStarted: (() -> Unit)? = null
+    var onTransformChanged: ((BrowParams) -> Unit)? = null
+    private var placementMode = false
+    private var placementGestureInProgress = false
+    private var multiTouchTransform = false
+    private var lastTouchX = 0f
+    private var lastTouchY = 0f
+    private var gestureStartParams = BrowParams()
+    private var initialSpan = 1f
+    private var initialAngle = 0f
+    private var initialCentroidX = 0f
+    private var initialCentroidY = 0f
+
     fun setSegmentationResult(result: BrowSegmentationResult?, visible: Boolean) {
         segmentationResult = result
         showSegmentation = visible
@@ -2483,12 +2496,27 @@ private class BrowDesignView(context: Context) : View(context) {
         invalidate()
     }
 
+    fun setPlacementMode(enabled: Boolean) {
+        placementMode = enabled
+        placementGestureInProgress = false
+        multiTouchTransform = false
+        invalidate()
+    }
+
+    fun isPlacementModeActive(): Boolean = placementMode
+
     override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
-        if (!editSegmentationMask || !showSegmentation || event.action !in listOf(
+        if (editSegmentationMask && showSegmentation) return handleSegmentationTouch(event)
+        if (placementMode) return handlePlacementTouch(event)
+        return super.onTouchEvent(event)
+    }
+
+    private fun handleSegmentationTouch(event: android.view.MotionEvent): Boolean {
+        if (event.actionMasked !in listOf(
                 android.view.MotionEvent.ACTION_DOWN,
                 android.view.MotionEvent.ACTION_MOVE,
                 android.view.MotionEvent.ACTION_UP
-            )) return super.onTouchEvent(event)
+            )) return true
         val image = photo ?: return false
         val result = segmentationResult ?: return false
         if (image.isRecycled || result.overlay.isRecycled) return false
@@ -2500,9 +2528,7 @@ private class BrowDesignView(context: Context) : View(context) {
         val maskX = imageX - result.offsetX
         val maskY = imageY - result.offsetY
         if (maskX < 0f || maskX >= result.overlay.width.toFloat() ||
-            maskY < 0f || maskY >= result.overlay.height.toFloat()) {
-            return true
-        }
+            maskY < 0f || maskY >= result.overlay.height.toFloat()) return true
         val brushRadius = max(4f, (8f * resources.displayMetrics.density) / scale)
         val maskCanvas = Canvas(result.overlay)
         val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -2516,11 +2542,115 @@ private class BrowDesignView(context: Context) : View(context) {
             }
         }
         maskCanvas.drawCircle(maskX, maskY, brushRadius, maskPaint)
-        if (event.action == android.view.MotionEvent.ACTION_UP) {
+        if (event.actionMasked == android.view.MotionEvent.ACTION_UP) {
             nativeContours = BrowRenderer.extractNativeContours(result)
             if (useNativeShape && nativeContours.isEmpty()) useNativeShape = false
         }
         invalidate()
+        return true
+    }
+
+    private fun faceWidthInView(): Float {
+        val image = photo ?: return 1f
+        if (image.isRecycled || points.size <= 454) return max(1f, image.width * 0.35f)
+        val scale = max(width.toFloat() / image.width.coerceAtLeast(1), height.toFloat() / image.height.coerceAtLeast(1))
+        val widthPixels = hypot(
+            (points[234].x - points[454].x).toDouble(),
+            (points[234].y - points[454].y).toDouble()
+        ).toFloat() * scale
+        return widthPixels.coerceAtLeast(1f)
+    }
+
+    private fun gestureSpan(event: android.view.MotionEvent): Float {
+        if (event.pointerCount < 2) return 1f
+        return hypot(
+            (event.getX(1) - event.getX(0)).toDouble(),
+            (event.getY(1) - event.getY(0)).toDouble()
+        ).toFloat().coerceAtLeast(1f)
+    }
+
+    private fun gestureAngle(event: android.view.MotionEvent): Float {
+        if (event.pointerCount < 2) return 0f
+        return atan2(event.getY(1) - event.getY(0), event.getX(1) - event.getX(0))
+    }
+
+    private fun normalizedAngleDelta(current: Float, initial: Float): Float {
+        var delta = current - initial
+        val pi = Math.PI.toFloat()
+        while (delta > pi) delta -= 2f * pi
+        while (delta < -pi) delta += 2f * pi
+        return Math.toDegrees(delta.toDouble()).toFloat()
+    }
+
+    private fun handlePlacementTouch(event: android.view.MotionEvent): Boolean {
+        val image = photo
+        if (image == null || image.isRecycled || points.size <= 454) return false
+        when (event.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> {
+                placementGestureInProgress = true
+                multiTouchTransform = false
+                gestureStartParams = params
+                lastTouchX = event.x
+                lastTouchY = event.y
+                onTransformGestureStarted?.invoke()
+                return true
+            }
+            android.view.MotionEvent.ACTION_POINTER_DOWN -> {
+                if (event.pointerCount >= 2) {
+                    multiTouchTransform = true
+                    gestureStartParams = params
+                    initialSpan = gestureSpan(event)
+                    initialAngle = gestureAngle(event)
+                    initialCentroidX = (event.getX(0) + event.getX(1)) / 2f
+                    initialCentroidY = (event.getY(0) + event.getY(1)) / 2f
+                }
+                return true
+            }
+            android.view.MotionEvent.ACTION_MOVE -> {
+                if (!placementGestureInProgress) return true
+                val faceWidth = faceWidthInView()
+                if (multiTouchTransform && event.pointerCount >= 2) {
+                    val currentCentroidX = (event.getX(0) + event.getX(1)) / 2f
+                    val currentCentroidY = (event.getY(0) + event.getY(1)) / 2f
+                    val ratio = gestureSpan(event) / initialSpan
+                    val deltaDegrees = normalizedAngleDelta(gestureAngle(event), initialAngle)
+                    params = gestureStartParams.copy(
+                        offsetXRatio = (gestureStartParams.offsetXRatio +
+                            (currentCentroidX - initialCentroidX) / faceWidth).coerceIn(-0.20f, 0.20f),
+                        offsetYRatio = (gestureStartParams.offsetYRatio +
+                            (currentCentroidY - initialCentroidY) / faceWidth).coerceIn(-0.20f, 0.20f),
+                        placementScale = (gestureStartParams.placementScale * ratio).coerceIn(0.75f, 1.25f),
+                        rotationDegrees = (gestureStartParams.rotationDegrees + deltaDegrees).coerceIn(-25f, 25f)
+                    )
+                } else {
+                    params = params.copy(
+                        offsetXRatio = (params.offsetXRatio + (event.x - lastTouchX) / faceWidth).coerceIn(-0.20f, 0.20f),
+                        offsetYRatio = (params.offsetYRatio + (event.y - lastTouchY) / faceWidth).coerceIn(-0.20f, 0.20f)
+                    )
+                    lastTouchX = event.x
+                    lastTouchY = event.y
+                }
+                onTransformChanged?.invoke(params)
+                invalidate()
+                return true
+            }
+            android.view.MotionEvent.ACTION_POINTER_UP -> {
+                if (multiTouchTransform && event.pointerCount <= 2) {
+                    multiTouchTransform = false
+                    val remainingIndex = if (event.actionIndex == 0) 1 else 0
+                    lastTouchX = event.getX(remainingIndex)
+                    lastTouchY = event.getY(remainingIndex)
+                    gestureStartParams = params
+                }
+                return true
+            }
+            android.view.MotionEvent.ACTION_UP,
+            android.view.MotionEvent.ACTION_CANCEL -> {
+                placementGestureInProgress = false
+                multiTouchTransform = false
+                return true
+            }
+        }
         return true
     }
 
