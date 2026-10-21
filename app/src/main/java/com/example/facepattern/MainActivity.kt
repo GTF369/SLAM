@@ -72,6 +72,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 import java.util.UUID
 import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -82,7 +83,13 @@ private data class BrowParams(
     val thickness: Float = 1.0f,
     val length: Float = 1.0f,
     val arch: Float = 1.0f,
-    val style: Int = 0
+    val style: Int = 0,
+    // Translation is measured as a fraction of face width so that the same
+    // placement carries through preview, comparison, and physical stencil output.
+    val offsetXRatio: Float = 0f,
+    val offsetYRatio: Float = 0f,
+    val placementScale: Float = 1f,
+    val rotationDegrees: Float = 0f
 )
 
 private data class BrowPlan(
@@ -115,6 +122,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var thicknessSeek: SeekBar
     private lateinit var lengthSeek: SeekBar
     private lateinit var archSeek: SeekBar
+    private lateinit var placementButton: Button
+    private lateinit var placementLabel: TextView
 
     private var landmarker: FaceLandmarker? = null
     private var cameraExecutor: ExecutorService? = null
@@ -160,6 +169,15 @@ class MainActivity : AppCompatActivity() {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
         browView = BrowDesignView(this)
+        browView.onTransformGestureStarted = {
+            stopTransition()
+            history.add(params.copy())
+        }
+        browView.onTransformChanged = { updated ->
+            params = updated
+            syncSliders()
+            updatePlacementLabel()
+        }
         browView.setParams(params)
 
         val root = FrameLayout(this)
@@ -296,6 +314,30 @@ class MainActivity : AppCompatActivity() {
             params = params.copy(arch = 0.55f + p / 100f * 0.90f)
             browView.setParams(params)
         }
+        placementLabel = TextView(this).apply {
+            textSize = 11f
+            setTextColor(0xFFD5D7DC.toInt())
+            setPadding(dp(2), dp(5), dp(2), dp(2))
+            text = "手动定位：关闭"
+        }
+        designControls.addView(placementLabel)
+        placementButton = Button(this).apply {
+            text = "开启手动定位"
+            textSize = 12f
+            isAllCaps = false
+            setOnClickListener {
+                val enabled = !browView.isPlacementModeActive()
+                browView.setPlacementMode(enabled)
+                text = if (enabled) "完成手动定位" else "开启手动定位"
+                status.text = if (enabled) {
+                    "手动定位已开启：单指拖动，双指捏合缩放并旋转。定位会进入撤销历史并参与打印。"
+                } else {
+                    "手动定位已完成，预览、保存方案和打印模板将使用当前定位。"
+                }
+                updatePlacementLabel()
+            }
+        }
+        designControls.addView(placementButton, LinearLayout.LayoutParams(-1, dp(42)))
         addButtonRow(designControls, listOf(
             "暂停 / 继续" to { toggleTransition() },
             "回撤一步" to { undoAdjustment() },
@@ -984,6 +1026,15 @@ class MainActivity : AppCompatActivity() {
         params = history.removeAt(history.lastIndex)
         browView.setParams(params)
         syncSliders()
+    }
+
+    private fun updatePlacementLabel() {
+        if (!::placementLabel.isInitialized) return
+        placementLabel.text =
+            "手动定位：X ${(params.offsetXRatio * 100f).roundToInt()}% 面宽，" +
+            "Y ${(params.offsetYRatio * 100f).roundToInt()}% 面宽，" +
+            "缩放 x${"%.2f".format(params.placementScale)}，" +
+            "旋转 ${params.rotationDegrees.roundToInt()}°"
     }
 
     private fun syncSliders() {
