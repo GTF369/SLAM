@@ -339,6 +339,21 @@ class MainActivity : AppCompatActivity() {
         }
         designControls.addView(placementButton, LinearLayout.LayoutParams(-1, dp(42)))
         addButtonRow(designControls, listOf(
+            "重置手动定位" to {
+                stopTransition()
+                history.add(params.copy())
+                params = params.copy(
+                    offsetXRatio = 0f,
+                    offsetYRatio = 0f,
+                    placementScale = 1f,
+                    rotationDegrees = 0f
+                )
+                browView.setParams(params)
+                updatePlacementLabel()
+                status.text = "已恢复眉形定位到面部关键点基准"
+            }
+        ))
+        addButtonRow(designControls, listOf(
             "暂停 / 继续" to { toggleTransition() },
             "回撤一步" to { undoAdjustment() },
             "保存方案" to { savePlan() }
@@ -924,6 +939,7 @@ class MainActivity : AppCompatActivity() {
         history.clear()
         browView.setParams(params)
         syncSliders()
+        updatePlacementLabel()
         refreshRecommendations(photoPoints)
         cameraProvider?.unbindAll()
         imageCapture = null
@@ -979,10 +995,15 @@ class MainActivity : AppCompatActivity() {
                     from.thickness + (target.thickness - from.thickness) * t,
                     from.length + (target.length - from.length) * t,
                     from.arch + (target.arch - from.arch) * t,
-                    if (t < 0.5f) from.style else target.style
+                    if (t < 0.5f) from.style else target.style,
+                    from.offsetXRatio + (target.offsetXRatio - from.offsetXRatio) * t,
+                    from.offsetYRatio + (target.offsetYRatio - from.offsetYRatio) * t,
+                    from.placementScale + (target.placementScale - from.placementScale) * t,
+                    from.rotationDegrees + (target.rotationDegrees - from.rotationDegrees) * t
                 )
                 browView.setParams(params)
                 syncSliders()
+                updatePlacementLabel()
             }
             addListener(object : AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: Animator) {
@@ -1026,6 +1047,7 @@ class MainActivity : AppCompatActivity() {
         params = history.removeAt(history.lastIndex)
         browView.setParams(params)
         syncSliders()
+        updatePlacementLabel()
     }
 
     private fun updatePlacementLabel() {
@@ -1088,6 +1110,7 @@ class MainActivity : AppCompatActivity() {
         params = plan.params.copy()
         browView.setParams(params)
         syncSliders()
+        updatePlacementLabel()
         status.text = if (useNativeShape) "正在预览：${plan.name}（原生眉形轮廓）" else "正在预览：" + plan.name
     }
 
@@ -2750,9 +2773,20 @@ private object BrowRenderer {
         val mapped = points.map { PointF(imageLeft + it.x * scale, imageTop + it.y * scale) }
         val faceWidth = distance(mapped[234], mapped[454]).coerceAtLeast(1f)
         val pivot = pivotForBrows(mapped)
-        canvas.translate(params.offsetXRatio * faceWidth, params.offsetYRatio * faceWidth)
-        canvas.rotate(params.rotationDegrees, pivot.x, pivot.y)
-        canvas.scale(params.placementScale, params.placementScale, pivot.x, pivot.y)
+        val angle = Math.toRadians(params.rotationDegrees.toDouble())
+        val scaleValue = params.placementScale.coerceIn(0.75f, 1.25f)
+        val a = (scaleValue * Math.cos(angle)).toFloat()
+        val b = (scaleValue * Math.sin(angle)).toFloat()
+        val c = -b
+        val d = a
+        val offsetX = params.offsetXRatio * faceWidth
+        val offsetY = params.offsetYRatio * faceWidth
+        val tx = pivot.x + offsetX - a * pivot.x - c * pivot.y
+        val ty = pivot.y + offsetY - b * pivot.x - d * pivot.y
+        val placementMatrix = Matrix().apply {
+            setValues(floatArrayOf(a, c, tx, b, d, ty, 0f, 0f, 1f))
+        }
+        canvas.concat(placementMatrix)
         return save
     }
 
