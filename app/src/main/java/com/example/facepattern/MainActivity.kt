@@ -3271,14 +3271,17 @@ private object BrowRenderer {
         if (points.size < 455 || width <= 0 || height <= 0) return null
         val browPoints = browSets.flatMap { ids -> ids.map { index -> points.getOrNull(index) }.filterNotNull() }
         if (browPoints.isEmpty()) return null
-        val faceWidth = if (points.size > 454) abs(points[454].x - points[234].x) else width * 0.35f
+        val faceWidth = if (points.size > 454) distance(points[454], points[234]) else width * 0.35f
         val maxCorrection = curvatureFactors.values.maxOrNull()?.coerceIn(1f, 1.4f) ?: 1f
-        val marginX = max(8f, faceWidth * (0.06f + (maxCorrection - 1f) * 0.9f))
-        val marginY = max(8f, faceWidth * 0.11f)
-        val left = (browPoints.minOf { it.x } - marginX).toInt().coerceIn(0, width - 1)
-        val top = (browPoints.minOf { it.y } - marginY).toInt().coerceIn(0, height - 1)
-        val right = (browPoints.maxOf { it.x } + marginX).toInt().coerceIn(left + 1, width)
-        val bottom = (browPoints.maxOf { it.y } + marginY).toInt().coerceIn(top + 1, height)
+        val transformMargin = abs(params.placementScale - 1f) * 0.12f +
+            (abs(params.rotationDegrees) / 25f).coerceIn(0f, 1f) * 0.07f
+        val marginX = max(8f, faceWidth * (0.08f + (maxCorrection - 1f) * 0.9f + transformMargin))
+        val marginY = max(8f, faceWidth * (0.12f + transformMargin))
+        val transformedBrowPoints = placementBoundsPoints(browPoints, points, params)
+        val left = (transformedBrowPoints.minOf { it.x } - marginX).toInt().coerceIn(0, width - 1)
+        val top = (transformedBrowPoints.minOf { it.y } - marginY).toInt().coerceIn(0, height - 1)
+        val right = (transformedBrowPoints.maxOf { it.x } + marginX).toInt().coerceIn(left + 1, width)
+        val bottom = (transformedBrowPoints.maxOf { it.y } + marginY).toInt().coerceIn(top + 1, height)
         val shiftedPoints = points.map { point -> PointF(point.x - left, point.y - top) }
         // Only allocate the small eyebrow region, not a full-resolution transparent
         // bitmap the size of the whole face photo. This reduces peak memory use.
