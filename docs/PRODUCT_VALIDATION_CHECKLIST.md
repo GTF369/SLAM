@@ -34,7 +34,9 @@ Use this list to distinguish code completion, automated tests, device testing an
 ## D. Android and printer
 
 - [ ] Test OPPO Find X7 camera permission, capture, repeated use, background/foreground, rotation, memory pressure and low-light warnings.
-- [ ] Complete camera capture → segmentation review → edit → undo/pause → save/compare → export → print flow on target Android versions.
+- [ ] Complete camera capture → segmentation review → brush add/erase → brush-stroke undo/redo → parameter undo and transition pause/resume → save/compare → export → print flow on target Android versions.
+- [ ] Save a case, force-stop/relaunch the app, reopen it from the local case library, verify the original photo, current mask, and saved plans, then delete the case and verify its private files are removed.
+- [ ] Verify local case retention is disclosed to the customer and confirm that "Clear local records" clearly distinguishes preference/curvature data from saved case photos. Test storage-full and interrupted-write recovery.
 - [ ] Complete gallery/document-picker import with JPEG, PNG, rotated EXIF images, high-resolution photos, unsupported/corrupt images, face-not-found cases, and cancellation. Verify mirrored design coordinates are reversed correctly for the final template.
 - [ ] Test missing/corrupt models, landmark initialization errors, extreme image sizes, print cancellation and state restoration.
 - [ ] Maintain a separate named calibration profile for each intended printer / driver / paper / setting combination. For each profile, verify the 20 mm calibration square, actual template dimensions, orientation, margins, no fit-to-page scaling and transfer alignment. The profile name is operator-managed and is not automatic printer discovery.
@@ -47,6 +49,10 @@ Use this list to distinguish code completion, automated tests, device testing an
 - [ ] Configure a company-controlled release signing key in repository secrets only, never committed to source.
 - [ ] Build and test a signed release package and its upgrade path. A debug APK is not a commercial release artifact.
 
+## Automated Android launch smoke test
+
+The Android build job installs the debug APK in an Android emulator, grants camera permission, launches `MainActivity`, and fails if the application process does not stay alive or AndroidRuntime reports a fatal exception. This does not automate the photo-picker workflow, touch editing or printer APIs, and does not validate the OPPO Find X7.
+
 ## Automated public image smoke test
 
 The `public-image-smoke-test` GitHub Actions job downloads two public sample portraits and the same MediaPipe / EasyPortrait model assets used by the Android package. It reports face-landmark detection, CPU model inference, class 6/7 mask coverage within the app's brow ROIs, and whether the current fallback gate accepts the model mask. It also uploads overlay previews for manual inspection.
@@ -55,4 +61,4 @@ This is a **pipeline smoke test, not an accuracy benchmark**. It has no professi
 
 ## Status before in-person validation
 
-The repository has on-device design/edit/plan workflows, model-assisted brow segmentation with manual correction, anonymous feedback export, a ranking-model training path, curvature-measurement export and grouped analysis, and print-scale correction. It does not contain real customer-trained ranking or segmentation weights. Device/printer behavior, actual stencil transfer accuracy and 3D curvature correction remain empirical acceptance items that code alone cannot establish.
+The repository has on-device design/edit/plan workflows, brush-stroke undo/redo, a basic persistent local case library, model-assisted brow segmentation with manual correction, anonymous feedback export, a ranking-model training path, curvature-measurement export and grouped analysis, and printer-specific scale profiles. It does not contain real customer-trained ranking or segmentation weights. Local case persistence still needs force-stop/reopen, storage-error and deletion testing. Device/printer behavior, actual stencil transfer accuracy and 3D curvature correction remain empirical acceptance items that code alone cannot establish.
