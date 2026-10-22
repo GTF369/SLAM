@@ -81,6 +81,9 @@ Follow [CURVATURE_PROTOCOL.md](CURVATURE_PROTOCOL.md): consistent endpoints, rep
 
 ## 4. Brow-region segmentation
 
+The eyebrow ROI training script reports pooled-pixel metrics as well as ROI-macro and equal-weighted customer-macro Dice/IoU and error rates. See `ml/segmentation_metrics.py`. Interpret the pooled score together with customer-macro results because multiple photos or left/right ROIs from one customer must not dominate model selection. These remain internal grouped-test metrics and are not a substitute for a prospective external salon cohort.
+
+
 The Android app supports three segmentation paths:
 
 - **Customer-trained eyebrow model**: when `app/src/main/assets/brow_segmentation.tflite` exists with float32 input `[1,256,256,3]` and output `[1,256,256,1]`, it is preferred.
