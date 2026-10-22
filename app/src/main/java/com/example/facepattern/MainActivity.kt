@@ -1958,6 +1958,406 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+
+    private fun caseLibraryRoot(): File = File(filesDir, "brow_cases")
+
+    private fun encodeBrowParams(value: BrowParams): org.json.JSONObject =
+        org.json.JSONObject().apply {
+            put("thickness", value.thickness.toDouble())
+            put("length", value.length.toDouble())
+            put("arch", value.arch.toDouble())
+            put("style", value.style)
+        }
+
+    private fun decodeBrowParams(value: org.json.JSONObject?): BrowParams {
+        if (value == null) return BrowParams()
+        return BrowParams(
+            thickness = value.optDouble("thickness", 1.0).toFloat().coerceIn(0.55f, 1.45f),
+            length = value.optDouble("length", 1.0).toFloat().coerceIn(0.80f, 1.20f),
+            arch = value.optDouble("arch", 1.0).toFloat().coerceIn(0.55f, 1.45f),
+            style = value.optInt("style", 0).coerceIn(0, 2)
+        )
+    }
+
+    private fun duplicateSegmentation(value: BrowSegmentationResult?): BrowSegmentationResult? {
+        if (value == null || value.overlay.isRecycled) return null
+        val bitmap = value.overlay.copy(Bitmap.Config.ARGB_8888, true) ?: return null
+        return value.copy(overlay = bitmap, regions = value.regions.map { it.copyOf() })
+    }
+
+    private fun writeBitmapVersioned(bitmap: Bitmap, destination: File, format: Bitmap.CompressFormat, quality: Int): Boolean {
+        val temporary = File(destination.parentFile, destination.name + ".tmp")
+        return try {
+            FileOutputStream(temporary).use { stream ->
+                if (!bitmap.compress(format, quality, stream)) throw IllegalStateException("图片编码失败")
+                stream.fd.sync()
+            }
+            if (destination.exists() && !destination.delete()) throw IllegalStateException("无法更新图片文件")
+            if (!temporary.renameTo(destination)) {
+                temporary.copyTo(destination, overwrite = true)
+                temporary.delete()
+            }
+            destination.isFile && destination.length() > 0L
+        } catch (_: Exception) {
+            temporary.delete()
+            false
+        }
+    }
+
+    private fun writeMaskSnapshot(
+        directory: File,
+        prefix: String,
+        suffix: Long,
+        result: BrowSegmentationResult?
+    ): org.json.JSONObject? {
+        if (result == null || result.overlay.isRecycled) return null
+        val fileName = prefix + "_" + suffix + ".png"
+        val target = File(directory, fileName)
+        if (!writeBitmapVersioned(result.overlay, target, Bitmap.CompressFormat.PNG, 100)) {
+            throw IllegalStateException("无法保存识别轮廓")
+        }
+        val regionsJson = org.json.JSONArray()
+        result.regions.forEach { region ->
+            val regionJson = org.json.JSONArray()
+            region.forEach { regionJson.put(it) }
+            regionsJson.put(regionJson)
+        }
+        return org.json.JSONObject().apply {
+            put("mask_file", fileName)
+            put("offset_x", result.offsetX)
+            put("offset_y", result.offsetY)
+            put("method", result.method)
+            put("mask_quality_score", result.maskQualityScore.toDouble())
+            put("selected_pixel_count", result.selectedPixelCount)
+            put("regions", regionsJson)
+        }
+    }
+
+    private fun readMaskSnapshot(directory: File, metadata: org.json.JSONObject?): BrowSegmentationResult? {
+        if (metadata == null) return null
+        val fileName = metadata.optString("mask_file", "")
+        if (fileName.isBlank() || File(fileName).name != fileName) return null
+        val bitmap = BitmapFactory.decodeFile(File(directory, fileName).absolutePath) ?: return null
+        val regions = mutableListOf<IntArray>()
+        val regionArray = metadata.optJSONArray("regions")
+        if (regionArray != null) {
+            for (i in 0 until regionArray.length()) {
+                val row = regionArray.optJSONArray(i) ?: continue
+                if (row.length() < 4) continue
+                regions.add(IntArray(row.length()) { index -> row.optInt(index) })
+            }
+        }
+        if (regions.size < 2) {
+            bitmap.recycle()
+            return null
+        }
+        return BrowSegmentationResult(
+            overlay = bitmap,
+            offsetX = metadata.optInt("offset_x", 0),
+            offsetY = metadata.optInt("offset_y", 0),
+            method = metadata.optString("method", "本机保存的轮廓"),
+            maskQualityScore = metadata.optDouble("mask_quality_score", 0.0).toFloat().coerceIn(0f, 1f),
+            selectedPixelCount = metadata.optInt("selected_pixel_count", 0).coerceAtLeast(0),
+            regions = regions
+        )
+    }
+
+    private fun readCaseManifest(directory: File): org.json.JSONObject? {
+        val manifest = File(directory, "case.json")
+        val backup = File(directory, "case.json.bak")
+        for (candidate in listOf(manifest, backup)) {
+            if (!candidate.isFile) continue
+            try {
+                return org.json.JSONObject(candidate.readText(Charsets.UTF_8))
+            } catch (_: Exception) {
+                // Try the last known good backup if the newest write was interrupted.
+            }
+        }
+        return null
+    }
+
+    private fun writeCaseSnapshot(
+        recordId: String,
+        displayName: String,
+        anonymousId: String,
+        photo: Bitmap,
+        currentParams: BrowParams,
+        currentUseNativeShape: Boolean,
+        reviewed: Boolean,
+        showSegmentation: Boolean,
+        currentSegmentation: BrowSegmentationResult?,
+        plans: List<BrowPlan>
+    ): Boolean {
+        val directory = File(caseLibraryRoot(), recordId)
+        if (!directory.exists() && !directory.mkdirs()) return false
+        val timestamp = System.currentTimeMillis()
+        val photoFileName = "photo_" + timestamp + ".jpg"
+        if (!writeBitmapVersioned(photo, File(directory, photoFileName), Bitmap.CompressFormat.JPEG, 94)) {
+            return false
+        }
+        return try {
+            val currentMask = writeMaskSnapshot(directory, "mask_current", timestamp, currentSegmentation)
+            val planJson = org.json.JSONArray()
+            val keepFiles = mutableSetOf(photoFileName)
+            currentMask?.optString("mask_file")?.takeIf { it.isNotBlank() }?.let { keepFiles.add(it) }
+            plans.forEachIndexed { index, plan ->
+                val mask = writeMaskSnapshot(directory, "mask_plan_" + index, timestamp, plan.segmentationSnapshot)
+                mask?.optString("mask_file")?.takeIf { it.isNotBlank() }?.let { keepFiles.add(it) }
+                planJson.put(org.json.JSONObject().apply {
+                    put("name", plan.name.take(80))
+                    put("params", encodeBrowParams(plan.params))
+                    put("use_native_shape", plan.useNativeShape)
+                    put("mask", mask ?: org.json.JSONObject.NULL)
+                })
+            }
+            val manifest = org.json.JSONObject().apply {
+                put("schema_version", 1)
+                put("record_id", recordId)
+                put("display_name", displayName.take(100))
+                put("anonymous_case_id", anonymousId)
+                put("saved_at", timestamp)
+                put("photo_file", photoFileName)
+                put("current_params", encodeBrowParams(currentParams))
+                put("current_use_native_shape", currentUseNativeShape)
+                put("segmentation_reviewed", reviewed)
+                put("show_segmentation", showSegmentation)
+                put("current_segmentation", currentMask ?: org.json.JSONObject.NULL)
+                put("plans", planJson)
+                put("storage_note", "Stored in app-private internal storage. This app does not upload the image. The image is not separately encrypted.")
+            }
+            val manifestFile = File(directory, "case.json")
+            val backupFile = File(directory, "case.json.bak")
+            val temporary = File(directory, "case.json.tmp")
+            if (manifestFile.isFile) manifestFile.copyTo(backupFile, overwrite = true)
+            FileOutputStream(temporary).use { stream ->
+                stream.write(manifest.toString(2).toByteArray(Charsets.UTF_8))
+                stream.fd.sync()
+            }
+            if (manifestFile.exists() && !manifestFile.delete()) throw IllegalStateException("无法替换案例索引")
+            if (!temporary.renameTo(manifestFile)) {
+                temporary.copyTo(manifestFile, overwrite = true)
+                temporary.delete()
+            }
+            if (!manifestFile.isFile || manifestFile.length() == 0L) throw IllegalStateException("案例索引保存失败")
+            backupFile.delete()
+            // Remove stale image snapshots only after the new manifest is committed.
+            keepFiles.add("case.json")
+            directory.listFiles()?.filter { it.isFile && (it.name.startsWith("photo_") || it.name.startsWith("mask_")) }
+                ?.filter { it.name !in keepFiles }
+                ?.forEach { it.delete() }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun saveCurrentCaseToLibrary() {
+        val photo = capturedPhoto
+        if (photo == null || photo.isRecycled) {
+            Toast.makeText(this, "请先拍摄或导入照片并完成设计", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val nameInput = EditText(this).apply {
+            hint = "例如：顾客案例 A"
+            setSingleLine(true)
+            setText(activeStoredCaseName.ifBlank { "眉形案例 " + currentCaseId })
+        }
+        val note = TextView(this).apply {
+            text = "案例会保存在应用私有目录，包含照片、当前识别轮廓及已保存方案，只有此应用可直接读取。照片不会由本应用上传，但未单独加密。请先获得顾客对本地留存的授权。卸载应用或清除应用数据会删除案例。"
+            textSize = 12f
+            setPadding(dp(18), dp(4), dp(18), dp(8))
+        }
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(note)
+            addView(nameInput)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("保存案例到本机")
+            .setView(form)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("保存") { _, _ ->
+                val displayName = nameInput.text.toString().trim().ifBlank { "眉形案例 " + currentCaseId }
+                    .take(100)
+                val recordId = activeStoredCaseId ?: UUID.randomUUID().toString()
+                val photoSnapshot = try { photo.copy(Bitmap.Config.ARGB_8888, false) } catch (_: Exception) { null }
+                if (photoSnapshot == null) {
+                    Toast.makeText(this, "无法复制照片，请重试", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                val currentMask = duplicateSegmentation(segmentationResult)
+                val planSnapshots = savedPlans.map { plan ->
+                    plan.copy(params = plan.params.copy(), segmentationSnapshot = duplicateSegmentation(plan.segmentationSnapshot))
+                }
+                val paramsSnapshot = params.copy()
+                val nativeSnapshot = useNativeShape
+                val reviewSnapshot = segmentationReviewed
+                val showSnapshot = showNativeSegmentation
+                val anonymousSnapshot = currentCaseId
+                status.text = "正在将案例保存到本机…"
+                Thread({
+                    val saved = try {
+                        writeCaseSnapshot(
+                            recordId, displayName, anonymousSnapshot, photoSnapshot, paramsSnapshot,
+                            nativeSnapshot, reviewSnapshot, showSnapshot, currentMask, planSnapshots
+                        )
+                    } catch (_: Exception) {
+                        false
+                    } finally {
+                        if (!photoSnapshot.isRecycled) photoSnapshot.recycle()
+                        currentMask?.overlay?.let { if (!it.isRecycled) it.recycle() }
+                        planSnapshots.forEach { it.segmentationSnapshot?.overlay?.let { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() } }
+                    }
+                    runOnUiThread {
+                        if (saved) {
+                            activeStoredCaseId = recordId
+                            activeStoredCaseName = displayName
+                            status.text = "案例已保存到本机，可从“本机案例库”重新打开。"
+                            Toast.makeText(this, "案例已保存", Toast.LENGTH_LONG).show()
+                        } else {
+                            status.text = "案例保存失败，请检查存储空间后重试"
+                            Toast.makeText(this, status.text, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }, "BrowCaseSave").start()
+            }
+            .show()
+    }
+
+    private fun openSavedCaseLibrary() {
+        val root = caseLibraryRoot()
+        val directories = root.listFiles()?.filter { it.isDirectory && readCaseManifest(it) != null }
+            ?.sortedByDescending { it.lastModified() }.orEmpty()
+        if (directories.isEmpty()) {
+            Toast.makeText(this, "本机案例库为空。完成设计后点击“保存本机案例”", Toast.LENGTH_LONG).show()
+            return
+        }
+        val names = directories.map { directory ->
+            val metadata = readCaseManifest(directory)
+            val name = metadata?.optString("display_name", directory.name).orEmpty().ifBlank { directory.name }
+            val anonymous = metadata?.optString("anonymous_case_id", "").orEmpty()
+            val savedAt = metadata?.optLong("saved_at", directory.lastModified()) ?: directory.lastModified()
+            val date = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
+                .format(java.util.Date(savedAt))
+            name + "  ·  " + date + if (anonymous.isBlank()) "" else "\n匿名编号：" + anonymous
+        }.toTypedArray()
+        var selectedIndex = 0
+        AlertDialog.Builder(this)
+            .setTitle("本机案例库（保存在本设备）")
+            .setSingleChoiceItems(names, selectedIndex) { _, which -> selectedIndex = which }
+            .setNegativeButton("关闭", null)
+            .setNeutralButton("删除案例") { dialog, _ ->
+                val target = directories.getOrNull(selectedIndex) ?: return@setNeutralButton
+                dialog.dismiss()
+                val metadata = readCaseManifest(target)
+                val caseName = metadata?.optString("display_name", target.name) ?: target.name
+                AlertDialog.Builder(this)
+                    .setTitle("删除案例")
+                    .setMessage("确定删除“" + caseName + "”及其本机照片、识别轮廓和方案吗？此操作无法撤销。已导出的照片或 PDF 不会自动删除。")
+                    .setNegativeButton("取消", null)
+                    .setPositiveButton("删除") { _, _ ->
+                        val activeId = activeStoredCaseId
+                        val removed = target.deleteRecursively()
+                        if (removed && activeId == target.name) {
+                            activeStoredCaseId = null
+                            activeStoredCaseName = ""
+                        }
+                        Toast.makeText(this, if (removed) "案例已删除" else "删除失败，请重试", Toast.LENGTH_SHORT).show()
+                        openSavedCaseLibrary()
+                    }
+                    .show()
+            }
+            .setPositiveButton("打开") { _, _ ->
+                val target = directories.getOrNull(selectedIndex)
+                if (target != null) loadStoredCase(target.name)
+            }
+            .show()
+    }
+
+    private fun loadStoredCase(recordId: String) {
+        val directory = File(caseLibraryRoot(), recordId)
+        status.text = "正在读取本机案例…"
+        if (imageExecutor == null || imageExecutor?.isShutdown != false) {
+            imageExecutor = Executors.newSingleThreadExecutor()
+        }
+        val executor = imageExecutor ?: return
+        executor.execute {
+            var photo: Bitmap? = null
+            var detector: FaceLandmarker? = null
+            var mpImage: com.google.mediapipe.framework.image.MPImage? = null
+            var restored: RestoredBrowCase? = null
+            var points: List<PointF> = emptyList()
+            var depths: List<Float> = emptyList()
+            var error: String? = null
+            try {
+                val manifest = readCaseManifest(directory) ?: throw IllegalStateException("案例索引损坏")
+                if (manifest.optInt("schema_version", 0) != 1) throw IllegalStateException("不支持的案例版本")
+                val photoName = manifest.optString("photo_file", "")
+                if (photoName.isBlank() || File(photoName).name != photoName) throw IllegalStateException("案例照片路径无效")
+                photo = BitmapFactory.decodeFile(File(directory, photoName).absolutePath)
+                    ?: throw IllegalStateException("案例照片读取失败")
+                val currentMask = readMaskSnapshot(directory, manifest.optJSONObject("current_segmentation"))
+                val planList = mutableListOf<BrowPlan>()
+                val storedPlans = manifest.optJSONArray("plans") ?: org.json.JSONArray()
+                for (index in 0 until storedPlans.length()) {
+                    val item = storedPlans.optJSONObject(index) ?: continue
+                    val paramsValue = decodeBrowParams(item.optJSONObject("params"))
+                    val maskValue = readMaskSnapshot(directory, item.optJSONObject("mask"))
+                    planList.add(BrowPlan(
+                        name = item.optString("name", "方案 " + (index + 1)).take(80),
+                        params = paramsValue,
+                        useNativeShape = item.optBoolean("use_native_shape", false) && maskValue != null,
+                        segmentationSnapshot = maskValue
+                    ))
+                }
+                restored = RestoredBrowCase(
+                    recordId = recordId,
+                    displayName = manifest.optString("display_name", recordId),
+                    anonymousCaseId = manifest.optString("anonymous_case_id", UUID.randomUUID().toString().take(8)),
+                    currentParams = decodeBrowParams(manifest.optJSONObject("current_params")),
+                    currentUseNativeShape = manifest.optBoolean("current_use_native_shape", false) && currentMask != null,
+                    segmentationReviewed = manifest.optBoolean("segmentation_reviewed", false) && currentMask != null,
+                    showSegmentation = manifest.optBoolean("show_segmentation", false),
+                    currentSegmentation = currentMask,
+                    plans = planList
+                )
+                detector = FaceLandmarker.createFromOptions(
+                    this@MainActivity,
+                    FaceLandmarker.FaceLandmarkerOptions.builder()
+                        .setBaseOptions(BaseOptions.builder().setModelAssetPath("face_landmarker.task").build())
+                        .setRunningMode(RunningMode.IMAGE)
+                        .setNumFaces(1)
+                        .build()
+                )
+                mpImage = BitmapImageBuilder(photo).build()
+                val landmarks = detector.detect(mpImage).faceLandmarks().firstOrNull()
+                points = landmarks?.map { PointF(it.x() * photo!!.width, it.y() * photo!!.height) } ?: emptyList()
+                depths = landmarks?.map { it.z() } ?: emptyList()
+                if (points.size < 400) throw IllegalStateException("无法在案例照片上重新定位人脸，原案例仍保留在本机")
+            } catch (e: Exception) {
+                error = e.message ?: "读取案例失败"
+                restored?.currentSegmentation?.overlay?.let { if (!it.isRecycled) it.recycle() }
+                restored?.plans?.forEach { it.segmentationSnapshot?.overlay?.let { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() } }
+                restored = null
+            } finally {
+                try { mpImage?.close() } catch (_: Exception) {}
+                try { detector?.close() } catch (_: Exception) {}
+            }
+            runOnUiThread {
+                val loadedPhoto = photo
+                val caseState = restored
+                if (error != null || loadedPhoto == null || caseState == null) {
+                    loadedPhoto?.let { if (!it.isRecycled) it.recycle() }
+                    status.text = error ?: "案例读取失败"
+                    Toast.makeText(this@MainActivity, status.text, Toast.LENGTH_LONG).show()
+                } else {
+                    pendingRestoredCase = caseState
+                    enterDesignMode(loadedPhoto, points, depths)
+                }
+            }
+        }
+    }
+
     private fun recordPreference() {
         val points = browView.facePoints()
         if (capturedPhoto == null || points.size < 455) {
