@@ -31,7 +31,9 @@ import android.print.PrintDocumentInfo
 import android.provider.MediaStore
 import android.print.PrintManager
 import android.print.pdf.PrintedPdfDocument
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.animation.LinearInterpolator
@@ -1985,17 +1987,50 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(4), dp(6), dp(4), dp(6))
         }
         val printScalePrefs = getSharedPreferences("brow_print_calibration", Context.MODE_PRIVATE)
-        val savedPrintScaleCorrection = printScalePrefs.getFloat("scale_correction", 1f)
+        val profileInput = EditText(this).apply {
+            hint = "例如：办公室打印机型号_A4_普通纸_驱动名称"
+            setSingleLine(true)
+            setText(printScalePrefs.getString("last_profile", "默认打印配置"))
+        }
+        fun profileSlug(raw: String): String = raw.trim().lowercase()
+            .map { if (it.isLetterOrDigit()) it else '_' }
+            .joinToString("")
+            .replace(Regex("_+"), "_")
+            .trim('_')
+            .take(48)
+            .ifBlank { "default" }
+        fun profilePreferenceKey(raw: String): String =
+            "scale_correction_profile_${profileSlug(raw)}"
+        fun scaleForProfile(raw: String): Float {
+            val key = profilePreferenceKey(raw)
+            if (printScalePrefs.contains(key)) return printScalePrefs.getFloat(key, 1f)
+            // Migrate the former single global coefficient only into the default profile.
+            return if (profileSlug(raw) == profileSlug("默认打印配置")) {
+                printScalePrefs.getFloat("scale_correction", 1f)
+            } else {
+                1f
+            }
+        }
+        val savedPrintScaleCorrection = scaleForProfile(profileInput.text.toString())
         val printScaleInput = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             hint = "上一张打印稿中 20 mm 方框的实测边长，未测量留空"
             setText("")
         }
         val printScaleState = TextView(this).apply {
-            text = "当前已保存打印比例修正系数：x${(savedPrintScaleCorrection * 1000f).roundToInt() / 1000f}。留空会继续使用该系数。"
+            text = "配置：${profileInput.text}。当前比例修正系数：x${(savedPrintScaleCorrection * 1000f).roundToInt() / 1000f}。仅适用于同一打印机、纸张和设置。"
             textSize = 11f
             setPadding(dp(4), dp(2), dp(4), dp(4))
         }
+        profileInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                val name = s?.toString().orEmpty().trim().ifBlank { "未命名配置" }
+                val scale = scaleForProfile(name)
+                printScaleState.text = "配置：$name。当前比例修正系数：x${(scale * 1000f).roundToInt() / 1000f}。仅适用于同一打印机、纸张和设置。"
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
         val resetPrintScale = CheckBox(this).apply {
             text = "更换打印机、纸张或打印设置后，重置修正系数"
             isChecked = false
@@ -2031,7 +2066,13 @@ class MainActivity : AppCompatActivity() {
             })
             addView(input)
             addView(TextView(this@MainActivity).apply {
-                text = "打印比例校准（可选，当前已保存系数会持续生效）"
+                text = "打印配置名称（设备、纸张和驱动设置）"
+                textSize = 12f
+                setPadding(dp(4), dp(4), dp(4), 0)
+            })
+            addView(profileInput)
+            addView(TextView(this@MainActivity).apply {
+                text = "打印比例校准（可选，按上方配置分别保存）"
                 textSize = 12f
                 setPadding(dp(4), dp(4), dp(4), 0)
             })
@@ -2066,16 +2107,21 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, "校准框实测边长应为 16–24 毫米，首次打印可留空", Toast.LENGTH_LONG).show()
                     return@setPositiveButton
                 }
-                val correctionBase = if (resetPrintScale.isChecked) 1f else
-                    getSharedPreferences("brow_print_calibration", Context.MODE_PRIVATE)
-                        .getFloat("scale_correction", 1f)
+                val printProfileName = profileInput.text.toString().trim().take(80)
+                if (printProfileName.length < 3) {
+                    Toast.makeText(this, "请为打印机、纸张和驱动设置填写一个易识别的配置名称", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                val printProfileKey = profilePreferenceKey(printProfileName)
+                val correctionBase = if (resetPrintScale.isChecked) 1f else scaleForProfile(printProfileName)
                 val printScaleCorrection = measuredSquareMm?.let { correctionBase * 20f / it } ?: correctionBase
                 if (printScaleCorrection !in 0.80f..1.25f) {
                     Toast.makeText(this, "计算出的打印修正超出 0.80–1.25。请检查是否选择了实际尺寸、A4 纸张和正确的校准框，必要时重置比例。", Toast.LENGTH_LONG).show()
                     return@setPositiveButton
                 }
-                getSharedPreferences("brow_print_calibration", Context.MODE_PRIVATE).edit()
-                    .putFloat("scale_correction", printScaleCorrection)
+                printScalePrefs.edit()
+                    .putFloat(printProfileKey, printScaleCorrection)
+                    .putString("last_profile", printProfileName)
                     .apply()
 
                 val pixelDistance = BrowRenderer.pupilDistance(points)
