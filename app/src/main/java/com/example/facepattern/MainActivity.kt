@@ -182,11 +182,16 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         buildUi()
-        // Instrumentation tests exercise local editing/storage without depending on the
-        // emulator's virtual camera or the native face-model runtime. Production launches
-        // never set this private test flag and follow the normal camera permission flow.
+        // Instrumentation tests can load a synthetic, non-personal portrait to exercise
+        // editing and encrypted case persistence without camera permissions or public photos.
+        // Production launches never set these private extras.
         if (intent.getBooleanExtra("com.example.facepattern.INSTRUMENTATION_TEST_MODE", false)) {
-            status.text = "仪器测试模式。相机未启动。"
+            if (intent.getBooleanExtra("com.example.facepattern.SYNTHETIC_DESIGN_MODE", false)) {
+                val (testPhoto, testLandmarks) = createInstrumentationPortrait()
+                enterDesignMode(testPhoto, testLandmarks)
+            } else {
+                status.text = "仪器测试模式。相机未启动。"
+            }
             return
         }
         if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
@@ -194,6 +199,64 @@ class MainActivity : AppCompatActivity() {
         } else {
             requestPermissions(arrayOf(android.Manifest.permission.CAMERA), cameraPermission)
         }
+    }
+
+    private fun createInstrumentationPortrait(): Pair<Bitmap, List<PointF>> {
+        val width = 800
+        val height = 1000
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.drawColor(Color.rgb(241, 235, 228))
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        paint.color = Color.rgb(52, 39, 35)
+        canvas.drawOval(118f, 80f, 682f, 925f, paint)
+        paint.color = Color.rgb(224, 181, 153)
+        canvas.drawOval(135f, 115f, 665f, 900f, paint)
+        paint.color = Color.rgb(75, 51, 43)
+        canvas.drawArc(125f, 55f, 675f, 440f, 180f, 180f, false, paint)
+        paint.color = Color.rgb(45, 36, 34)
+        canvas.drawOval(260f, 392f, 365f, 425f, paint)
+        canvas.drawOval(435f, 392f, 540f, 425f, paint)
+        paint.color = Color.rgb(66, 45, 39)
+        canvas.drawOval(265f, 342f, 370f, 366f, paint)
+        canvas.drawOval(430f, 342f, 535f, 366f, paint)
+        paint.color = Color.rgb(249, 247, 240)
+        canvas.drawOval(298f, 394f, 327f, 422f, paint)
+        canvas.drawOval(468f, 394f, 497f, 422f, paint)
+        paint.color = Color.rgb(49, 40, 38)
+        canvas.drawCircle(313f, 408f, 12f, paint)
+        canvas.drawCircle(483f, 408f, 12f, paint)
+        paint.color = Color.rgb(133, 87, 68)
+        paint.strokeWidth = 7f
+        paint.strokeCap = Paint.Cap.ROUND
+        canvas.drawLine(400f, 412f, 382f, 515f, paint)
+        canvas.drawLine(382f, 515f, 410f, 523f, paint)
+        paint.color = Color.rgb(151, 68, 67)
+        paint.strokeWidth = 10f
+        canvas.drawLine(335f, 650f, 465f, 650f, paint)
+
+        val points = MutableList(478) { PointF(width * 0.5f, height * 0.5f) }
+        fun point(index: Int, x: Float, y: Float) {
+            points[index] = PointF(width * x, height * y)
+        }
+        point(234, 0.20f, 0.50f)
+        point(454, 0.80f, 0.50f)
+        point(10, 0.50f, 0.12f)
+        point(152, 0.50f, 0.88f)
+        point(1, 0.50f, 0.54f)
+        point(33, 0.36f, 0.41f)
+        point(263, 0.64f, 0.41f)
+        point(70, 0.31f, 0.36f)
+        point(63, 0.345f, 0.35f)
+        point(105, 0.38f, 0.345f)
+        point(66, 0.415f, 0.35f)
+        point(107, 0.45f, 0.365f)
+        point(300, 0.55f, 0.365f)
+        point(293, 0.585f, 0.35f)
+        point(334, 0.62f, 0.345f)
+        point(296, 0.655f, 0.35f)
+        point(336, 0.69f, 0.36f)
+        return bitmap to points
     }
 
     private fun buildUi() {
@@ -1141,9 +1204,23 @@ class MainActivity : AppCompatActivity() {
         } else {
             "高分辨率照片已分析，正在自动识别原生眉区并生成初稿。请核查识别轮廓后再用于打印。"
         }
-        // New images start a fresh segmentation pass. Stored cases keep their reviewed
-        // mask snapshot so manual edits are not silently replaced by a new inference.
-        if (segmentationResult == null) runSegmentation()
+        // The synthetic instrumentation portrait deliberately skips native inference.
+        // This verifies the real editing screen and encrypted case persistence without
+        // pretending synthetic landmarks are real customers or model-accuracy evidence.
+        val instrumentationMode = intent.getBooleanExtra(
+            "com.example.facepattern.INSTRUMENTATION_TEST_MODE", false
+        )
+        if (instrumentationMode) {
+            status.text = if (restoredCase != null) {
+                "仪器测试模式：本机案例已恢复，可继续编辑。"
+            } else {
+                "仪器测试模式：合成测试照片已加载。"
+            }
+        } else if (segmentationResult == null) {
+            // New images start a fresh segmentation pass. Stored cases keep their reviewed
+            // mask snapshot so manual edits are not silently replaced by a new inference.
+            runSegmentation()
+        }
     }
 
     private fun retakePhoto() {
