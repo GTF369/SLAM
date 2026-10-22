@@ -153,7 +153,9 @@ def main() -> None:
     parser.add_argument("--promote-to-app", action="store_true",
                         help="Copy candidate into app assets only when the untouched grouped test Dice meets the threshold.")
     parser.add_argument("--min-test-dice", "--min-validation-dice", dest="min_test_dice", type=float, default=0.70,
-                        help="Minimum untouched grouped test Dice required for --promote-to-app.")
+                        help="Minimum untouched grouped test pooled-pixel Dice required for --promote-to-app.")
+    parser.add_argument("--min-test-customer-macro-dice", type=float, default=0.70,
+                        help="Minimum untouched grouped test equal-weighted customer-macro Dice required for --promote-to-app.")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -263,11 +265,16 @@ def main() -> None:
     print(json.dumps(metrics, indent=2))
     print(f"Candidate TFLite model written to {args.output}")
     if args.promote_to_app:
-        if metrics["test_dice"] < args.min_test_dice:
+        pooled_dice = metrics["test_dice"]
+        customer_dice = metrics["test_customer_macro_dice"]
+        if pooled_dice < args.min_test_dice or customer_dice < args.min_test_customer_macro_dice:
             raise SystemExit(
-                f"Model not promoted: untouched grouped test Dice={metrics['test_dice']:.3f} "
-                f"is below --min-test-dice={args.min_test_dice:.3f}. "
-                "Review annotations and collect more consented cases."
+                "Model not promoted: untouched grouped test metrics failed release gates. "
+                f"Pooled-pixel Dice={pooled_dice:.3f} (minimum {args.min_test_dice:.3f}); "
+                f"customer-macro Dice={customer_dice:.3f} "
+                f"(minimum {args.min_test_customer_macro_dice:.3f}). "
+                "A good pooled score cannot compensate for poor average performance across customers. "
+                "Review annotations and collect more consented, diverse cases."
             )
         app_path = Path("app/src/main/assets/brow_segmentation.tflite")
         app_path.parent.mkdir(parents=True, exist_ok=True)
