@@ -58,6 +58,8 @@ The Android build job installs the debug APK in an Android emulator, grants came
 
 The `public-image-smoke-test` GitHub Actions job downloads public sample portraits and the same MediaPipe / EasyPortrait model assets used by the Android package. It reports face-landmark detection, CPU model inference, class 2/3 mask coverage within the app's brow ROIs, and whether the current fallback gate accepts the model mask. It also uploads overlay previews for manual inspection.
 
+The `emulator-ui-regression` job additionally runs Android instrumentation tests using a synthetic non-personal portrait. It checks the editor screen, plan save, encrypted case save/reopen, and restored plan parameters. It is an emulator workflow test, not a substitute for OPPO Find X7 testing.
+
 This is a **pipeline smoke test, not an accuracy benchmark**. It has no professional eyebrow masks as ground truth, it uses Python runtimes rather than the Android ARM64 libraries, and it does not install or launch the APK. A non-empty predicted mask is not proof that it follows the true eyebrow boundary. Keep the expert-annotated customer test set and OPPO/printer tests as separate release gates.
 
 ## Status before in-person validation
