@@ -1761,11 +1761,11 @@ class MainActivity : AppCompatActivity() {
                 text = "用于研究眉区实测弧长与弦长关系。请使用柔性尺测量，照片像素不能代替毫米。局部圆弧半径仅为几何近似，不是三维面部重建。不同意数据研究时请取消。"
                 textSize = 13f
             })
+            addView(consent)
             addView(caseIdField)
             addView(region)
             addView(chord)
             addView(field)
-            addView(consent)
         }
         AlertDialog.Builder(this)
             .setTitle("眉弓曲率标定记录")
@@ -2413,8 +2413,8 @@ class MainActivity : AppCompatActivity() {
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(note)
-            addView(nameInput)
             addView(consent)
+            addView(nameInput)
         }
         AlertDialog.Builder(this)
             .setTitle("保存案例到本机")
@@ -2691,11 +2691,11 @@ class MainActivity : AppCompatActivity() {
                 text = "记录的是匿名几何特征、方案参数和顾客反馈，不保存照片或身份信息。不同意时可以取消，设计功能不受影响。"
                 textSize = 13f
             })
+            addView(consent)
             addView(anonymousClientCode)
             addView(ratingLabel)
             addView(ratingBar)
             addView(selected)
-            addView(consent)
         }
         AlertDialog.Builder(this)
             .setTitle("记录顾客偏好")
@@ -2875,6 +2875,7 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(8), dp(18), 0)
             addView(note)
+            addView(consent)
             addView(TextView(this@MainActivity).apply { text = "匿名案例编号：$currentCaseId"; textSize = 12f })
             addView(profile)
             addView(region)
@@ -2882,7 +2883,6 @@ class MainActivity : AppCompatActivity() {
             addView(skinArc)
             addView(printedPath)
             addView(endpointError)
-            addView(consent)
         }
         AlertDialog.Builder(this)
             .setTitle("打印与转印误差记录")
