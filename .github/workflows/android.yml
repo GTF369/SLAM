@@ -4,6 +4,11 @@ on:
     branches: [ main, master ]
   pull_request:
   workflow_dispatch:
+# Keep only the latest PR validation run active. This workflow builds Android, runs
+# an emulator, and downloads large vision assets, so queued stale commits waste runners.
+concurrency:
+  group: brow-assistant-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
   actions: read
