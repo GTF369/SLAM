@@ -35,28 +35,28 @@
 描述性分析：
 
 ```bash
-python ml/analyze_stencil_transfer.py brow_transfer_validation.csv \
+python ml/analyze_stencil_transfer.py brow_transfer_validation.csv \\
   --output stencil_transfer_summary.csv
 ```
 
 若要运行预先指定的工程筛查，必须同时提供两个容许误差阈值：
 
 ```bash
-python ml/analyze_stencil_transfer.py brow_transfer_validation.csv \
-  --min-cases 30 \
-  --max-p90-abs-length-error-mm <预先确定的长度误差阈值> \
-  --max-p90-endpoint-error-mm <预先确定的端点误差阈值> \
+python ml/analyze_stencil_transfer.py brow_transfer_validation.csv \\
+  --min-cases 30 \\
+  --max-p90-abs-length-error-mm <预先确定的长度误差阈值> \\
+  --max-p90-endpoint-error-mm <预先确定的端点误差阈值> \\
   --output stencil_transfer_summary.csv
 ```
 
-脚本按打印配置、眉区和曲率修正方法分别汇总。同一匿名顾客在同一方法下的重复记录先汇总为顾客级数据，再计算平均偏差、绝对误差分位数、端点误差覆盖率和人群均值 bootstrap 置信区间。它不会将“无曲率修正”与“顾客实测区域长度修正”混算，以便直接比较两种流程的观察误差。
+脚本先把同一匿名顾客、同一打印配置、同一眉区的重复记录汇总为顾客级数据，再计算平均偏差、绝对误差分位数、端点误差覆盖率和人群均值 bootstrap 置信区间。这样可以避免测量次数更多的顾客过度支配统计结果。
 
 样本数量门槛与误差阈值需要在查看最终测试结果前，由专业操作者按预期用途和风险预先确定。文档中的示例数值不构成医疗、行业或临床标准。即使通过工程筛查，也只代表可以交由专业人员审核，不会自动打开应用里的任何补偿功能。
 
 ## 5. 上线前不可省略的验证
 
 - 评估测量人员内、测量人员间的重复性和无效测量率。
-- 每个打印配置、眉区和修正方法报告独立顾客数量、误差区间和端点定位误差。
+- 每个打印配置和每个眉区报告独立顾客数量、误差区间和端点定位误差。
 - 用没有参与任何阈值选择和修正设计的新顾客做独立验证。
 - 若需要判断三维曲面补偿，必须使用独立 3D / 物理参考并评价真实表面路径误差，不能用 MediaPipe 相对 z 代替。
 - 在 OPPO Find X7 与指定打印机、纸张和驱动组合上完成端到端验收。
