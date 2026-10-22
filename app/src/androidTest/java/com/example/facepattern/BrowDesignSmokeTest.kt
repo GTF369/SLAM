@@ -199,19 +199,32 @@ class BrowDesignSmokeTest {
             val deadline = SystemClock.uptimeMillis() + 15_000L
             var caseDirectory: File? = null
             while (SystemClock.uptimeMillis() < deadline && caseDirectory == null) {
-                caseDirectory = root.listFiles()?.firstOrNull { File(it, "case.json").isFile }
+                caseDirectory = root.listFiles()?.firstOrNull { File(it, "case.json.enc").isFile }
                 if (caseDirectory == null) SystemClock.sleep(200L)
             }
             assertNotNull("Case manifest was not written", caseDirectory)
-            val savedDirectory = caseDirectory ?: throw AssertionError("Case manifest was not written")
-            val manifest = File(savedDirectory, "case.json")
-            assertTrue(manifest.readText(Charsets.UTF_8).contains("QA_CASE_2026"))
-            val manifestJson = org.json.JSONObject(manifest.readText(Charsets.UTF_8))
-            val photoName = manifestJson.getString("photo_file")
-            assertTrue("Persisted case photo is missing", File(savedDirectory, photoName).isFile)
-            val maskMetadata = manifestJson.getJSONObject("current_segmentation")
+            val savedDirectory = caseDirectory ?: throw AssertionError("Encrypted case manifest was not written")
+            val encryptedManifestFile = File(savedDirectory, "case.json.enc")
+            assertTrue("Case manifest must be encrypted at rest", encryptedManifestFile.isFile)
+            assertEquals("BROWCASE1", String(encryptedManifestFile.readBytes().copyOfRange(0, 9), Charsets.US_ASCII))
+            var manifestJson: org.json.JSONObject? = null
+            scenario.onActivity { activity ->
+                manifestJson = MainActivity::class.java
+                    .getDeclaredMethod("readCaseManifest", File::class.java)
+                    .apply { isAccessible = true }
+                    .invoke(activity, savedDirectory) as? org.json.JSONObject
+            }
+            val restoredManifest = manifestJson ?: throw AssertionError("Encrypted manifest could not be read")
+            assertEquals("QA_CASE_2026", restoredManifest.optString("anonymous_case_id"))
+            val photoName = restoredManifest.getString("photo_file")
+            val encryptedPhoto = File(savedDirectory, photoName)
+            assertTrue("Persisted case photo is missing", encryptedPhoto.isFile)
+            assertEquals("BROWCASE1", String(encryptedPhoto.readBytes().copyOfRange(0, 9), Charsets.US_ASCII))
+            val maskMetadata = restoredManifest.getJSONObject("current_segmentation")
             val maskName = maskMetadata.getString("mask_file")
-            assertTrue("Persisted segmentation mask is missing", File(savedDirectory, maskName).isFile)
+            val encryptedMask = File(savedDirectory, maskName)
+            assertTrue("Persisted segmentation mask is missing", encryptedMask.isFile)
+            assertEquals("BROWCASE1", String(encryptedMask.readBytes().copyOfRange(0, 9), Charsets.US_ASCII))
 
             scenario.onActivity { activity ->
                 MainActivity::class.java.getDeclaredMethod("openSavedCaseLibrary").apply {
