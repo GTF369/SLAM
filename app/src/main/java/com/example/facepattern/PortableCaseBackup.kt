@@ -239,14 +239,26 @@ internal object PortableCaseBackup {
         }
     }
 
-    private fun isSafeCaseFileName(name: String): Boolean =
-        name.isNotBlank() &&
+    private fun isSafeCaseFileName(name: String): Boolean {
+        val normalized = name.lowercase()
+        val reserved = setOf(
+            "case.json",
+            "case.json.bak",
+            "case.json.enc",
+            "case.json.enc.bak",
+            "case.json.enc.tmp"
+        )
+        return name.isNotBlank() &&
             name.length <= 180 &&
             name != "." &&
             name != ".." &&
             !name.contains("..") &&
             !name.contains('/') &&
             !name.contains('\\') &&
+            !normalized.startsWith(".") &&
+            normalized !in reserved &&
+            !normalized.endsWith(".tmp") &&
             name.none { it.code < 0x20 } &&
             java.io.File(name).name == name
+    }
 }
