@@ -46,6 +46,12 @@ Use this list to distinguish code completion, automated tests, device testing an
 - [ ] Configure a company-controlled release signing key in repository secrets only, never committed to source.
 - [ ] Build and test a signed release package and its upgrade path. A debug APK is not a commercial release artifact.
 
+## Automated public image smoke test
+
+The `public-image-smoke-test` GitHub Actions job downloads two public sample portraits and the same MediaPipe / EasyPortrait model assets used by the Android package. It reports face-landmark detection, CPU model inference, class 6/7 mask coverage within the app's brow ROIs, and whether the current fallback gate accepts the model mask. It also uploads overlay previews for manual inspection.
+
+This is a **pipeline smoke test, not an accuracy benchmark**. It has no professional eyebrow masks as ground truth, it uses Python runtimes rather than the Android ARM64 libraries, and it does not install or launch the APK. A non-empty predicted mask is not proof that it follows the true eyebrow boundary. Keep the expert-annotated customer test set and OPPO/printer tests as separate release gates.
+
 ## Status before in-person validation
 
 The repository has on-device design/edit/plan workflows, model-assisted brow segmentation with manual correction, anonymous feedback export, a ranking-model training path, curvature-measurement export and grouped analysis, and print-scale correction. It does not contain real customer-trained ranking or segmentation weights. Device/printer behavior, actual stencil transfer accuracy and 3D curvature correction remain empirical acceptance items that code alone cannot establish.
