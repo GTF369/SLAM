@@ -1,6 +1,10 @@
 package com.example.facepattern
 
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.os.SystemClock
+import android.view.MotionEvent
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
@@ -9,6 +13,7 @@ import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.UiScrollable
 import androidx.test.uiautomator.UiSelector
 import androidx.test.uiautomator.Until
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -60,6 +65,56 @@ class BrowWorkflowInstrumentedTest {
         assertNotNull(device.findObject(By.text("导入照片")))
         assertNotNull(device.findObject(By.text("本机案例库")))
         assertTrue(device.hasObject(By.text("仪器测试模式。相机未启动。")))
+    }
+
+    @Test
+    fun manualMaskStrokeSupportsUndoAndRedo() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val photo = Bitmap.createBitmap(200, 200, Bitmap.Config.ARGB_8888)
+        val overlay = Bitmap.createBitmap(120, 20, Bitmap.Config.ARGB_8888)
+        val regions = listOf(
+            intArrayOf(40, 70, 80, 90),
+            intArrayOf(120, 70, 160, 90),
+        )
+        val mask = BrowSegmentationResult(
+            overlay = overlay,
+            offsetX = 40,
+            offsetY = 70,
+            method = "instrumentation_test",
+            maskQualityScore = 0.5f,
+            selectedPixelCount = 0,
+            regions = regions,
+        )
+        val view = BrowDesignView(context)
+        view.layout(0, 0, 200, 200)
+        view.setPhoto(photo)
+        view.setSegmentationResult(mask, visible = true)
+        view.setSegmentationEditMode(enabled = true, includePixels = true)
+
+        try {
+            assertEquals(0, Color.alpha(overlay.getPixel(20, 10)))
+            val start = SystemClock.uptimeMillis()
+            val down = MotionEvent.obtain(start, start, MotionEvent.ACTION_DOWN, 60f, 80f, 0)
+            val up = MotionEvent.obtain(start, start + 50, MotionEvent.ACTION_UP, 60f, 80f, 0)
+            try {
+                assertTrue(view.onTouchEvent(down))
+                assertTrue(view.onTouchEvent(up))
+            } finally {
+                down.recycle()
+                up.recycle()
+            }
+
+            assertTrue("A manual stroke should add visible pixels", Color.alpha(overlay.getPixel(20, 10)) > 0)
+            assertTrue("The stroke should be undoable", view.canUndoMaskStroke())
+            assertTrue(view.undoLastMaskStroke())
+            assertEquals("Undo must restore the original transparent pixel", 0, Color.alpha(overlay.getPixel(20, 10)))
+            assertTrue("Undo should enable redo", view.canRedoMaskStroke())
+            assertTrue(view.redoLastMaskStroke())
+            assertTrue("Redo must restore the manual stroke", Color.alpha(overlay.getPixel(20, 10)) > 0)
+        } finally {
+            if (!photo.isRecycled) photo.recycle()
+            if (!overlay.isRecycled) overlay.recycle()
+        }
     }
 
     @Test
