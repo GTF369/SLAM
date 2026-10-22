@@ -3,7 +3,7 @@
 ## 测试图片
 
 - `virtual_makeup_demo.png`: [otdnnc/virtual-makeup demo asset](https://github.com/otdnnc/virtual-makeup/blob/main/apps/web/public/f.png). 仓库代码许可标注 MIT。此图片只在 CI 运行时下载，不提交到本仓库。
-- `unsplash_portrait.jpg`: [Unsplash portrait, photo id 1534528741775-53994a69daeb](https://unsplash.com/photos/9MR78HGoflw) 。从 Unsplash 图片 CDN 下载，遵循 [Unsplash License](https://unsplash.com/license)。此图片只在 CI 运行时下载，不提交到本仓库。
+- `unsplash_portrait.jpg`: [Unsplash portrait, photo id 1534528741775-53994a69daeb](https://unsplash.com/photos/1534528741775-53994a69daeb) 。从 Unsplash 图片 CDN 下载，遵循 [Unsplash License](https://unsplash.com/license)。此图片只在 CI 运行时下载，不提交到本仓库。
 
 测试任务还会从 demo 人像派生低亮度、模糊和水平镜像版本。派生图仅保存在 CI 临时目录和短期工件中。
 
