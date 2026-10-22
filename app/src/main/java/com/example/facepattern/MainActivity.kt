@@ -142,6 +142,7 @@ class MainActivity : AppCompatActivity() {
     private var activeStoredCaseId: String? = null
     private var activeStoredCaseName: String = ""
     private var pendingRestoredCase: RestoredBrowCase? = null
+    private var caseSaveInProgress = false
     private val lastTimestamp = AtomicLong(0L)
     private val cameraPermission = 701
     private var frameWidth = 640
@@ -2152,6 +2153,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveCurrentCaseToLibrary() {
+        if (caseSaveInProgress) {
+            Toast.makeText(this, "案例仍在保存，请勿重复提交", Toast.LENGTH_SHORT).show()
+            return
+        }
         val photo = capturedPhoto
         if (photo == null || photo.isRecycled) {
             Toast.makeText(this, "请先拍摄或导入照片并完成设计", Toast.LENGTH_SHORT).show()
@@ -2185,6 +2190,7 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, "无法复制照片，请重试", Toast.LENGTH_LONG).show()
                     return@setPositiveButton
                 }
+                caseSaveInProgress = true
                 val currentMask = duplicateSegmentation(segmentationResult)
                 val planSnapshots = savedPlans.map { plan ->
                     plan.copy(params = plan.params.copy(), segmentationSnapshot = duplicateSegmentation(plan.segmentationSnapshot))
@@ -2209,6 +2215,7 @@ class MainActivity : AppCompatActivity() {
                         planSnapshots.forEach { it.segmentationSnapshot?.overlay?.let { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() } }
                     }
                     runOnUiThread {
+                        caseSaveInProgress = false
                         if (saved) {
                             activeStoredCaseId = recordId
                             activeStoredCaseName = displayName
@@ -2529,7 +2536,7 @@ class MainActivity : AppCompatActivity() {
     private fun clearLocalRecords() {
         AlertDialog.Builder(this)
             .setTitle("清除应用内记录")
-            .setMessage("将删除本机保存的匿名偏好反馈与曲率测量记录。已导出的 CSV 文件和已保存到相册的设计图不会自动删除，需要到下载目录或相册中单独清除。此操作无法撤销。")
+            .setMessage("将删除本机保存的匿名偏好反馈与曲率测量记录，并清除当前会话中的方案。已经保存到“本机案例库”的照片、识别轮廓和方案不会被此按钮删除，需要进入案例库逐项删除。已导出的 CSV、PDF 和相册图片也不会自动删除。此操作无法撤销。")
             .setNegativeButton("取消", null)
             .setPositiveButton("清除") { _, _ ->
                 getSharedPreferences("brow_preference_feedback", Context.MODE_PRIVATE).edit().clear().apply()
