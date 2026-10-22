@@ -77,6 +77,7 @@ internal object PortableCaseBackup {
 
     fun pack(manifest: JSONObject, files: Map<String, ByteArray>): ByteArray {
         val requiredFiles = referencedFiles(manifest)
+        require(requiredFiles.size + 1 <= MAX_ENTRIES) { "案例包含过多文件" }
         require(files.keys == requiredFiles) {
             "备份文件与案例索引不一致"
         }
