@@ -34,7 +34,8 @@ Use this list to distinguish code completion, automated tests, device testing an
 ## D. Android and printer
 
 - [ ] Test OPPO Find X7 camera permission, capture, repeated use, background/foreground, rotation, memory pressure and low-light warnings.
-- [ ] Complete capture → segmentation review → edit → undo/pause → save/compare → export → print flow on target Android versions.
+- [ ] Complete camera capture → segmentation review → edit → undo/pause → save/compare → export → print flow on target Android versions.
+- [ ] Complete gallery/document-picker import with JPEG, PNG, rotated EXIF images, high-resolution photos, unsupported/corrupt images, face-not-found cases, and cancellation. Verify mirrored design coordinates are reversed correctly for the final template.
 - [ ] Test missing/corrupt models, landmark initialization errors, extreme image sizes, print cancellation and state restoration.
 - [ ] Maintain a separate named calibration profile for each intended printer / driver / paper / setting combination. For each profile, verify the 20 mm calibration square, actual template dimensions, orientation, margins, no fit-to-page scaling and transfer alignment. The profile name is operator-managed and is not automatic printer discovery.
 - [ ] Review logs, crash reports and accessibility/usability with practicing artists.
