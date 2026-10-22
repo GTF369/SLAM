@@ -73,6 +73,13 @@ jobs:
           gradle --no-daemon clean assembleDebug
           mkdir -p /tmp/face-pattern-oppo
           cp app/build/outputs/apk/debug/app-debug.apk /tmp/face-pattern-oppo/app-debug.apk
+      - name: Upload OPPO ARM64 APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: face-pattern-oppo-debug-apk
+          path: /tmp/face-pattern-oppo/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
       - name: Run case-library and mask-edit tests on an x86_64 Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -124,14 +131,6 @@ jobs:
             app/build/outputs/androidTest-results/connected/**
             app/build/reports/androidTests/connected/**
           if-no-files-found: warn
-          retention-days: 14
-      - name: Upload OPPO ARM64 APK artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: face-pattern-oppo-debug-apk
-          path: /tmp/face-pattern-oppo/app-debug.apk
-          if-no-files-found: error
           retention-days: 14
 
   python-validation:
