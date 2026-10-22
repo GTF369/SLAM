@@ -1277,7 +1277,7 @@ class MainActivity : AppCompatActivity() {
                             ?: throw IllegalStateException("无法创建 PDF 文件")
                         output = contentResolver.openOutputStream(uri!!)
                             ?: throw IllegalStateException("无法写入 PDF 文件")
-                        doc.writeTo(output)
+                        doc.writeTo(output!!)
                         output.close()
                         output = null
                         values.clear()
