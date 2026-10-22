@@ -1492,11 +1492,22 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        val consent = CheckBox(this).apply {
+            text = "我已取得顾客同意，将含人脸的方案预览导出为 PDF"
+            isChecked = false
+        }
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(8), dp(18), 0)
+            addView(TextView(this@MainActivity).apply {
+                text = "PDF 将包含人脸效果预览、方案名称和参数，并保存到本机下载目录。文件含可识别的人脸图像。该方案册不是 1:1 拓描模板，实际打印尺寸仍须使用专用打印校准流程。"
+                textSize = 13f
+            })
+            addView(consent)
+        }
         AlertDialog.Builder(this)
             .setTitle("导出眉形方案册")
-            .setMessage(
-                "PDF 将包含人脸效果预览、各方案名称和参数，并保存到本机下载目录。文件含可识别的人脸图像，请确认顾客已同意保存或分享效果预览。该方案册不是 1:1 拓描模板，实际打印尺寸仍须使用专用打印校准流程。"
-            )
+            .setView(form)
             .setNegativeButton("取消", null)
             .setPositiveButton("确认并导出") { _, _ ->
                 var document: android.graphics.pdf.PdfDocument? = null
@@ -1653,7 +1664,14 @@ class MainActivity : AppCompatActivity() {
                     try { document?.close() } catch (_: Exception) {}
                 }
             }
-            .show()
+            .create().also { dialog ->
+                dialog.setOnShowListener {
+                    val exportButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                    exportButton.isEnabled = consent.isChecked
+                    consent.setOnCheckedChangeListener { _, checked -> exportButton.isEnabled = checked }
+                }
+                dialog.show()
+            }
     }
 
     private fun exportOriginalPhotoForAnnotation() {
@@ -1719,9 +1737,10 @@ class MainActivity : AppCompatActivity() {
             }
     }
 
+
     private fun savePreviewToGallery() {
         val photo = capturedPhoto
-        if (photo == null) {
+        if (photo == null || photo.isRecycled) {
             Toast.makeText(this, "请先拍摄并设计眉形", Toast.LENGTH_SHORT).show()
             return
         }
@@ -1733,43 +1752,72 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "生成效果图失败：" + (e.message ?: "请重试"), Toast.LENGTH_LONG).show()
             return
         }
-        val filename = "眉形方案_${System.currentTimeMillis()}.png"
-        var output: java.io.OutputStream? = null
-        var uri: android.net.Uri? = null
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val values = ContentValues().apply {
-                    put(MediaStore.Images.Media.DISPLAY_NAME, filename)
-                    put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-                    put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/BrowDesign")
-                    put(MediaStore.Images.Media.IS_PENDING, 1)
-                }
-                uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-                if (uri == null) throw IllegalStateException("无法创建图片文件")
-                output = contentResolver.openOutputStream(uri) ?: throw IllegalStateException("无法写入图片文件")
-                if (!preview.compress(Bitmap.CompressFormat.PNG, 100, output)) throw IllegalStateException("图片编码失败")
-                output.close()
-                output = null
-                values.clear()
-                values.put(MediaStore.Images.Media.IS_PENDING, 0)
-                contentResolver.update(uri, values, null, null)
-                Toast.makeText(this, "效果图已保存到相册的 Pictures/BrowDesign", Toast.LENGTH_LONG).show()
-            } else {
-                val directory = File(getExternalFilesDir(Environment.DIRECTORY_PICTURES), "BrowDesign")
-                if (!directory.exists() && !directory.mkdirs()) throw IllegalStateException("无法创建保存目录")
-                val file = File(directory, filename)
-                FileOutputStream(file).use { stream ->
-                    if (!preview.compress(Bitmap.CompressFormat.PNG, 100, stream)) throw IllegalStateException("图片编码失败")
-                }
-                Toast.makeText(this, "效果图已保存到应用图片目录：" + file.absolutePath, Toast.LENGTH_LONG).show()
-            }
-        } catch (e: Exception) {
-            if (uri != null) contentResolver.delete(uri, null, null)
-            Toast.makeText(this, "保存失败：" + (e.message ?: "请重试"), Toast.LENGTH_LONG).show()
-        } finally {
-            try { output?.close() } catch (_: Exception) {}
-            preview.recycle()
+        val consent = CheckBox(this).apply {
+            text = "我已取得顾客同意，将包含人脸和眉形的效果图保存到相册"
+            isChecked = false
         }
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(8), dp(18), 0)
+            addView(TextView(this@MainActivity).apply {
+                text = "效果图包含可识别的人脸。保存后会写入系统相册，不会由应用自动上传。不同意时可以取消，并继续在应用内设计。"
+                textSize = 13f
+            })
+            addView(consent)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("保存眉形效果图")
+            .setView(form)
+            .setNegativeButton("取消") { _, _ ->
+                if (!preview.isRecycled) preview.recycle()
+            }
+            .setPositiveButton("保存效果图") { _, _ ->
+                val filename = "眉形方案_${System.currentTimeMillis()}.png"
+                var output: java.io.OutputStream? = null
+                var uri: android.net.Uri? = null
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        val values = ContentValues().apply {
+                            put(MediaStore.Images.Media.DISPLAY_NAME, filename)
+                            put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/BrowDesign")
+                            put(MediaStore.Images.Media.IS_PENDING, 1)
+                        }
+                        uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                        if (uri == null) throw IllegalStateException("无法创建图片文件")
+                        output = contentResolver.openOutputStream(uri) ?: throw IllegalStateException("无法写入图片文件")
+                        if (!preview.compress(Bitmap.CompressFormat.PNG, 100, output)) throw IllegalStateException("图片编码失败")
+                        output.close()
+                        output = null
+                        values.clear()
+                        values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                        contentResolver.update(uri, values, null, null)
+                        Toast.makeText(this, "效果图已保存到相册的 Pictures/BrowDesign", Toast.LENGTH_LONG).show()
+                    } else {
+                        val directory = File(getExternalFilesDir(Environment.DIRECTORY_PICTURES), "BrowDesign")
+                        if (!directory.exists() && !directory.mkdirs()) throw IllegalStateException("无法创建保存目录")
+                        val file = File(directory, filename)
+                        FileOutputStream(file).use { stream ->
+                            if (!preview.compress(Bitmap.CompressFormat.PNG, 100, stream)) throw IllegalStateException("图片编码失败")
+                        }
+                        Toast.makeText(this, "效果图已保存到应用图片目录：" + file.absolutePath, Toast.LENGTH_LONG).show()
+                    }
+                } catch (e: Exception) {
+                    if (uri != null) contentResolver.delete(uri, null, null)
+                    Toast.makeText(this, "保存失败：" + (e.message ?: "请重试"), Toast.LENGTH_LONG).show()
+                } finally {
+                    try { output?.close() } catch (_: Exception) {}
+                    if (!preview.isRecycled) preview.recycle()
+                }
+            }
+            .create().also { dialog ->
+                dialog.setOnShowListener {
+                    val saveButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                    saveButton.isEnabled = consent.isChecked
+                    consent.setOnCheckedChangeListener { _, checked -> saveButton.isEnabled = checked }
+                }
+                dialog.show()
+            }
     }
 
     private fun showCurvatureCalibration() {
