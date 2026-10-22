@@ -98,6 +98,7 @@ class BrowWorkflowInstrumentedTest {
             device.wait(Until.hasObject(By.textContains("合成测试照片已加载")), TimeUnit.SECONDS.toMillis(5))
         )
 
+        scrollTo("保存效果图")
         clickText("保存效果图")
         assertTrue(
             "Preview export dialog did not open",
