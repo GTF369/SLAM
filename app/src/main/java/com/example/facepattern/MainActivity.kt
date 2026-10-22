@@ -6,6 +6,7 @@ import android.animation.ValueAnimator
 import android.app.AlertDialog
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -19,6 +20,7 @@ import android.graphics.Path
 import android.graphics.PointF
 import android.graphics.RectF
 import android.graphics.Shader
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -48,6 +50,7 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -145,6 +148,11 @@ class MainActivity : AppCompatActivity() {
     private var segmentationReviewed = false
     private var segmentationSensitivity = 0.72f
     private var segmentationGeneration = 0
+    private val importPhotoLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            analyzeImportedPhoto(uri)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -196,6 +204,9 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             addButtonRow(this, listOf(
                 "拍照设计" to { captureForDesign() },
+                "导入照片" to { importPhotoFromGallery() }
+            ))
+            addButtonRow(this, listOf(
                 "重置" to { browView.setParams(BrowParams()); params = BrowParams() }
             ))
         }
@@ -569,6 +580,179 @@ class MainActivity : AppCompatActivity() {
         return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
     }
 
+    private fun importPhotoFromGallery() {
+        if (captureInProgress) return
+        val anonymousCode = EditText(this).apply {
+            hint = "匿名顾客代码，同一顾客重复到店请沿用"
+            setSingleLine(true)
+            setText(currentCaseId)
+        }
+        val notice = TextView(this).apply {
+            text = "选择本机相册或下载目录中的照片。照片只在本机内存中分析，不会上传。为保持与前置摄像头预览一致，导入图会水平镜像后进入设计。请确认顾客已同意将该照片用于眉形方案设计。"
+            textSize = 13f
+            setPadding(dp(20), dp(4), dp(20), dp(8))
+        }
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(notice)
+            addView(anonymousCode, LinearLayout.LayoutParams(-1, -2).apply {
+                setMargins(dp(20), dp(2), dp(20), dp(2))
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "不要填写姓名、电话号码或预约号。新顾客请点击“随机新代码”，同一顾客的授权研究记录应使用稳定匿名编号。"
+                textSize = 11f
+                setPadding(dp(20), dp(4), dp(20), dp(8))
+            })
+        }
+        AlertDialog.Builder(this)
+            .setTitle("导入顾客照片")
+            .setView(form)
+            .setNegativeButton("取消", null)
+            .setNeutralButton("随机新代码") { _, _ ->
+                currentCaseId = UUID.randomUUID().toString().take(8)
+                Toast.makeText(this, "已生成新的匿名代码：$currentCaseId，请再次点击导入照片", Toast.LENGTH_LONG).show()
+            }
+            .setPositiveButton("同意并选择照片") { _, _ ->
+                val safeCode = anonymousCode.text.toString().trim()
+                    .filter { it.isLetterOrDigit() || it == '_' || it == '-' }
+                    .take(32)
+                if (safeCode.isBlank()) {
+                    Toast.makeText(this, "请输入匿名代码或先生成随机代码", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                currentCaseId = safeCode
+                importPhotoLauncher.launch(arrayOf("image/*"))
+            }
+            .show()
+    }
+
+    private fun analyzeImportedPhoto(uri: Uri) {
+        if (captureInProgress) return
+        captureInProgress = true
+        status.text = "正在本机解码导入照片并分析人脸关键点…"
+        if (imageExecutor == null || imageExecutor?.isShutdown != false) {
+            imageExecutor = Executors.newSingleThreadExecutor()
+        }
+        val executor = imageExecutor
+        if (executor == null) {
+            captureInProgress = false
+            Toast.makeText(this, "照片分析线程不可用，请重试", Toast.LENGTH_LONG).show()
+            return
+        }
+        executor.execute {
+            var photo: Bitmap? = null
+            var points: List<PointF> = emptyList()
+            var depths: List<Float> = emptyList()
+            var failure: String? = null
+            var detector: FaceLandmarker? = null
+            var mpImage: com.google.mediapipe.framework.image.MPImage? = null
+            try {
+                photo = decodeImportedPhoto(uri)
+                if (photo == null) {
+                    failure = "无法读取该图片。请尝试 JPEG 或 PNG 格式的本地文件。"
+                } else {
+                    detector = FaceLandmarker.createFromOptions(
+                        this@MainActivity,
+                        FaceLandmarker.FaceLandmarkerOptions.builder()
+                            .setBaseOptions(BaseOptions.builder().setModelAssetPath("face_landmarker.task").build())
+                            .setRunningMode(RunningMode.IMAGE)
+                            .setNumFaces(1)
+                            .build()
+                    )
+                    mpImage = BitmapImageBuilder(photo).build()
+                    val result = detector.detect(mpImage)
+                    val detected = result.faceLandmarks().firstOrNull()
+                    points = detected?.map {
+                        PointF(it.x() * photo!!.width, it.y() * photo!!.height)
+                    } ?: emptyList()
+                    depths = detected?.map { it.z() } ?: emptyList()
+                    if (points.size < 400) {
+                        failure = "图片中未识别到足够的人脸关键点。请使用单人、正脸、眉眼无遮挡且清晰的照片。"
+                    }
+                }
+            } catch (e: Exception) {
+                failure = "导入图片分析失败：" + (e.message ?: "请尝试另一张照片")
+            } finally {
+                try { mpImage?.close() } catch (_: Exception) {}
+                try { detector?.close() } catch (_: Exception) {}
+            }
+            runOnUiThread {
+                captureInProgress = false
+                val selectedPhoto = photo
+                if (failure != null || selectedPhoto == null) {
+                    selectedPhoto?.recycle()
+                    status.text = failure ?: "导入照片失败，请重试"
+                    Toast.makeText(this@MainActivity, status.text, Toast.LENGTH_LONG).show()
+                } else {
+                    val warning = photoQualityWarning(selectedPhoto, points)
+                    if (warning == null) {
+                        enterDesignMode(selectedPhoto, points, depths)
+                    } else {
+                        AlertDialog.Builder(this@MainActivity)
+                            .setTitle("导入照片质量提醒")
+                            .setMessage(warning + "\n\n导入图片可能经过裁剪、滤镜或透视处理。继续前请检查双眼、眉头和眉尾定位。")
+                            .setNegativeButton("重新选择") { _, _ ->
+                                selectedPhoto.recycle()
+                                status.text = "可以重新选择一张清晰的正面照片"
+                            }
+                            .setPositiveButton("仍然使用") { _, _ -> enterDesignMode(selectedPhoto, points, depths) }
+                            .show()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun decodeImportedPhoto(uri: Uri): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) } ?: return null
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (max(bounds.outWidth, bounds.outHeight) / sample > 4096) sample *= 2
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sample
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        val decoded = contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, options)
+        } ?: return null
+        val orientation = try {
+            contentResolver.openInputStream(uri)?.use { ExifInterface(it) }
+                ?.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+                ?: ExifInterface.ORIENTATION_NORMAL
+        } catch (_: Exception) {
+            ExifInterface.ORIENTATION_NORMAL
+        }
+        val transform = Matrix()
+        when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> transform.postRotate(90f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> transform.postRotate(180f)
+            ExifInterface.ORIENTATION_ROTATE_270 -> transform.postRotate(270f)
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> transform.postScale(-1f, 1f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> transform.postScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> {
+                transform.postRotate(90f)
+                transform.postScale(-1f, 1f)
+            }
+            ExifInterface.ORIENTATION_TRANSVERSE -> {
+                transform.postRotate(270f)
+                transform.postScale(-1f, 1f)
+            }
+        }
+        val oriented = if (orientation == ExifInterface.ORIENTATION_NORMAL) decoded else {
+            Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, transform, true).also {
+                if (it !== decoded) decoded.recycle()
+            }
+        }
+        // Keep the same internal left/right convention as the selfie-camera design view.
+        return Bitmap.createBitmap(
+            oriented, 0, 0, oriented.width, oriented.height,
+            Matrix().apply { postScale(-1f, 1f, oriented.width / 2f, oriented.height / 2f) }, true
+        ).also {
+            if (it !== oriented) oriented.recycle()
+        }
+    }
+
     private fun captureForDesign() {
         if (captureInProgress) return
         val anonymousCode = EditText(this).apply {
@@ -855,10 +1039,8 @@ class MainActivity : AppCompatActivity() {
         normalizedDepths: List<Float> = emptyList()
     ) {
         stopTransition()
-        // A stable random anonymous ID belongs to one customer/design session.
-        // Generating it only once per Activity would merge unrelated customers in
-        // the feedback and curvature datasets, corrupting customer-level validation.
-        currentCaseId = UUID.randomUUID().toString().take(8)
+        // Keep the operator-confirmed anonymous case ID from the capture/import dialog.
+        // The same ID can then group authorized preference ratings and repeat measures.
         segmentationGeneration++
         savedPlans.forEach { it.segmentationSnapshot?.overlay?.recycle() }
         savedPlans.clear()
