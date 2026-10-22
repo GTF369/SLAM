@@ -2959,7 +2959,7 @@ class MainActivity : AppCompatActivity() {
     private fun clearLocalRecords() {
         AlertDialog.Builder(this)
             .setTitle("清除应用内记录")
-            .setMessage("将删除本机保存的匿名偏好反馈与曲率测量记录，并清除当前会话中的方案。已经保存到“本机案例库”的照片、识别轮廓和方案不会被此按钮删除，需要进入案例库逐项删除。已导出的 CSV、PDF 和相册图片也不会自动删除。此操作无法撤销。")
+            .setMessage("将删除本机保存的匿名偏好反馈、曲率测量和转印误差验证记录，并清除当前会话中的方案。已经保存到“本机案例库”的照片、识别轮廓和方案不会被此按钮删除，需要进入案例库逐项删除。已导出的 CSV、PDF 和相册图片也不会自动删除。此操作无法撤销。")
             .setNegativeButton("取消", null)
             .setPositiveButton("清除") { _, _ ->
                 getSharedPreferences("brow_preference_feedback", Context.MODE_PRIVATE).edit().clear().apply()
