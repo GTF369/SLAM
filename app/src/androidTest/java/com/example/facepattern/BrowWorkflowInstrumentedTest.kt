@@ -262,6 +262,52 @@ class BrowWorkflowInstrumentedTest {
     }
 
     @Test
+    fun portableBackupExportRequiresStrongMatchingPasswordAndConsent() {
+        launch(syntheticDesign = true)
+        assertTrue(
+            "Synthetic test design did not load",
+            device.wait(Until.hasObject(By.textContains("合成测试照片已加载")), TimeUnit.SECONDS.toMillis(5))
+        )
+        scrollTo("保存本机案例")
+        clickText("保存本机案例")
+        assertTrue(
+            "Case-save dialog did not open",
+            device.wait(Until.hasObject(By.text("保存案例到本机")), TimeUnit.SECONDS.toMillis(3))
+        )
+        typeIntoOnlyDialogField("CI_PORTABLE_BACKUP")
+        clickText("我已取得顾客对本机保存人脸照片、识别轮廓和眉形方案的明确授权")
+        clickText("保存")
+        assertTrue(
+            "The case should save before backup",
+            device.wait(Until.hasObject(By.textContains("案例已保存到本机")), TimeUnit.SECONDS.toMillis(20))
+        )
+
+        scrollTo("导出加密案例")
+        clickText("导出加密案例")
+        assertTrue(
+            "Saved-case chooser did not open",
+            device.wait(Until.hasObject(By.text("选择要导出的已保存案例")), TimeUnit.SECONDS.toMillis(3))
+        )
+        clickText("下一步")
+        assertTrue(
+            "Portable backup password dialog did not open",
+            device.wait(Until.hasObject(By.text("创建口令保护的案例备份")), TimeUnit.SECONDS.toMillis(3))
+        )
+        val passwordFields = device.findObjects(By.clazz("android.widget.EditText"))
+        assertTrue("Expected password and confirmation fields", passwordFields.size >= 2)
+        val exportButton = device.findObject(By.text("加密并导出"))
+        assertNotNull("Backup export button is missing", exportButton)
+        assertTrue("Backup export must require consent and a matching password", !exportButton!!.isEnabled)
+
+        passwordFields[0].text = "correct-horse-battery-27"
+        passwordFields[1].text = "correct-horse-battery-27"
+        assertTrue("Backup export must require explicit consent", !device.findObject(By.text("加密并导出")).isEnabled)
+        clickText("我已取得顾客对导出加密案例备份的明确授权")
+        assertTrue("Valid password and consent should enable export", device.findObject(By.text("加密并导出")).isEnabled)
+        clickText("取消")
+    }
+
+    @Test
     fun transferErrorRecordCanBeSavedAndExported() {
         launch(syntheticDesign = true)
         assertTrue(
