@@ -700,9 +700,14 @@ class MainActivity : AppCompatActivity() {
             textSize = 13f
             setPadding(dp(20), dp(4), dp(20), dp(8))
         }
+        val consent = CheckBox(this).apply {
+            text = "我已确认顾客同意将所选照片用于本次眉形设计"
+            isChecked = false
+        }
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(notice)
+            addView(consent)
             addView(anonymousCode, LinearLayout.LayoutParams(-1, -2).apply {
                 setMargins(dp(20), dp(2), dp(20), dp(2))
             })
@@ -731,7 +736,14 @@ class MainActivity : AppCompatActivity() {
                 currentCaseId = safeCode
                 importPhotoLauncher.launch(arrayOf("image/*"))
             }
-            .show()
+            .create().also { dialog ->
+                dialog.setOnShowListener {
+                    val chooseButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                    chooseButton.isEnabled = consent.isChecked
+                    consent.setOnCheckedChangeListener { _, checked -> chooseButton.isEnabled = checked }
+                }
+                dialog.show()
+            }
     }
 
     private fun analyzeImportedPhoto(uri: Uri) {
@@ -874,9 +886,14 @@ class MainActivity : AppCompatActivity() {
             textSize = 13f
             setPadding(dp(20), dp(4), dp(20), dp(8))
         }
+        val consent = CheckBox(this).apply {
+            text = "我已向顾客说明用途并取得本次拍摄和眉形设计同意"
+            isChecked = false
+        }
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(consentText)
+            addView(consent)
             addView(anonymousCode, LinearLayout.LayoutParams(-1, -2).apply {
                 setMargins(dp(20), dp(2), dp(20), dp(2))
             })
@@ -905,7 +922,14 @@ class MainActivity : AppCompatActivity() {
                 currentCaseId = safeCode
                 captureHighResolutionPhoto()
             }
-            .show()
+            .create().also { dialog ->
+                dialog.setOnShowListener {
+                    val captureButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                    captureButton.isEnabled = consent.isChecked
+                    consent.setOnCheckedChangeListener { _, checked -> captureButton.isEnabled = checked }
+                }
+                dialog.show()
+            }
     }
 
     private fun captureHighResolutionPhoto() {
@@ -1637,9 +1661,22 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "请先拍照", Toast.LENGTH_SHORT).show()
             return
         }
+        val exportConsent = CheckBox(this).apply {
+            text = "我已获得顾客对导出完整人脸照片并用于人工标注的单独明确授权"
+            isChecked = false
+        }
+        val exportForm = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(8), dp(16), 0)
+            addView(TextView(this@MainActivity).apply {
+                text = "该操作会将未叠加眉形的完整人脸照片保存到手机相册。照片可识别顾客身份，请勿未经授权上传、共享或用于其他用途。"
+                textSize = 13f
+            })
+            addView(exportConsent)
+        }
         AlertDialog.Builder(this)
             .setTitle("导出原始人脸照片")
-            .setMessage("该操作会将未叠加眉形的完整人脸照片保存到手机相册，供你在获得单独明确授权后进行本地人工标注和训练。照片可识别顾客身份，请勿未经授权上传、共享或用于其他用途。")
+            .setView(exportForm)
             .setNegativeButton("取消", null)
             .setPositiveButton("保存原始照片") { _, _ ->
                 val filename = "${currentCaseId}_source_${System.currentTimeMillis()}.png"
@@ -1672,7 +1709,14 @@ class MainActivity : AppCompatActivity() {
                     try { output?.close() } catch (_: Exception) {}
                 }
             }
-            .show()
+            .create().also { dialog ->
+                dialog.setOnShowListener {
+                    val exportButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                    exportButton.isEnabled = exportConsent.isChecked
+                    exportConsent.setOnCheckedChangeListener { _, checked -> exportButton.isEnabled = checked }
+                }
+                dialog.show()
+            }
     }
 
     private fun savePreviewToGallery() {
