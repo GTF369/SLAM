@@ -16,7 +16,7 @@ Use this list to distinguish code completion, automated tests, device testing an
 
 - [ ] Build a consented annotation set, with a portion independently marked by at least two trained annotators.
 - [ ] Group splits by customer so a customer's two brows or repeated photographs cannot straddle datasets.
-- [ ] Report Dice, IoU, boundary F-score, false-positive/false-negative rates and region-specific performance.
+- [ ] Report pooled-pixel and per-ROI Dice/IoU, plus equal-weighted per-customer Dice/IoU, precision/recall, specificity, false-positive and false-negative rates. Supplement with boundary F-score and region-specific performance where available.
 - [ ] Test makeup, skin/brow color, lighting, occlusion and uneven natural brows.
 - [ ] Visually verify the bundled parser's label mapping against the annotated salon set. A tensor shape check is not an accuracy test.
 - [ ] Define clinically/practically acceptable contour error before test evaluation. An internal Dice threshold alone is not a release decision.
@@ -36,7 +36,7 @@ Use this list to distinguish code completion, automated tests, device testing an
 - [ ] Test OPPO Find X7 camera permission, capture, repeated use, background/foreground, rotation, memory pressure and low-light warnings.
 - [ ] Complete capture → segmentation review → edit → undo/pause → save/compare → export → print flow on target Android versions.
 - [ ] Test missing/corrupt models, landmark initialization errors, extreme image sizes, print cancellation and state restoration.
-- [ ] Test each intended printer model / driver / paper combination. Verify 20 mm calibration square, actual template dimensions, orientation, margins, no fit-to-page scaling and transfer alignment.
+- [ ] Maintain a separate named calibration profile for each intended printer / driver / paper / setting combination. For each profile, verify the 20 mm calibration square, actual template dimensions, orientation, margins, no fit-to-page scaling and transfer alignment. The profile name is operator-managed and is not automatic printer discovery.
 - [ ] Review logs, crash reports and accessibility/usability with practicing artists.
 
 ## E. Privacy, license and release
