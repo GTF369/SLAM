@@ -75,7 +75,7 @@ For physical print-to-skin validation, the app also exports a separate transfer-
 python ml/analyze_stencil_transfer.py brow_transfer_validation.csv --output stencil_transfer_summary.csv
 ```
 
-Rows are grouped by printer profile and eyebrow region. Repeated observations are averaged within anonymous customer before summaries and bootstrap intervals are computed. The report includes signed and absolute template-length error, P90 absolute error, endpoint-placement error, sample coverage and customer counts. To run a predeclared engineering screen, supply both tolerances and the minimum case count, for example:
+Rows are grouped by printer profile, eyebrow region, and curvature method. Repeated observations are averaged within anonymous customer inside each method before summaries and bootstrap intervals are computed, so the no-correction baseline is never pooled with measured-curvature trials. The report includes signed and absolute template-length error, P90 absolute error, endpoint-placement error, sample coverage and customer counts. To run a predeclared engineering screen, supply both tolerances and the minimum case count, for example:
 
 ```bash
 python ml/analyze_stencil_transfer.py brow_transfer_validation.csv \\
