@@ -63,6 +63,34 @@ class BrowWorkflowInstrumentedTest {
     }
 
     @Test
+    fun photoCaptureAndImportRequireExplicitConsent() {
+        launch(syntheticDesign = false)
+        clickText("拍照设计")
+        assertTrue(
+            "Capture consent dialog did not open",
+            device.wait(Until.hasObject(By.text("顾客拍摄与数据使用确认")), TimeUnit.SECONDS.toMillis(3))
+        )
+        val captureButton = device.findObject(By.text("同意并拍照"))
+        assertNotNull("Capture confirmation button missing", captureButton)
+        assertTrue("Capture must remain disabled until consent is checked", !captureButton!!.isEnabled)
+        clickText("我已向顾客说明用途并取得本次拍摄和眉形设计同意")
+        assertTrue("Capture should be enabled after consent", device.findObject(By.text("同意并拍照")).isEnabled)
+        clickText("取消")
+
+        clickText("导入照片")
+        assertTrue(
+            "Photo-import consent dialog did not open",
+            device.wait(Until.hasObject(By.text("导入顾客照片")), TimeUnit.SECONDS.toMillis(3))
+        )
+        val importButton = device.findObject(By.text("同意并选择照片"))
+        assertNotNull("Photo import button missing", importButton)
+        assertTrue("Photo import must remain disabled until consent is checked", !importButton!!.isEnabled)
+        clickText("我已确认顾客同意将所选照片用于本次眉形设计")
+        assertTrue("Photo import should be enabled after consent", device.findObject(By.text("同意并选择照片")).isEnabled)
+        clickText("取消")
+    }
+
+    @Test
     fun transferErrorRecordCanBeSavedAndExported() {
         launch(syntheticDesign = true)
         assertTrue(
