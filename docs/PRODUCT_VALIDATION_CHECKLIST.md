@@ -16,7 +16,7 @@ Use this list to distinguish code completion, automated tests, device testing an
 
 - [ ] Build a consented annotation set, with a portion independently marked by at least two trained annotators.
 - [ ] Group splits by customer so a customer's two brows or repeated photographs cannot straddle datasets.
-- [ ] Report pooled-pixel and per-ROI Dice/IoU, plus equal-weighted per-customer Dice/IoU, precision/recall, specificity, false-positive and false-negative rates. Supplement with boundary F-score and region-specific performance where available.
+- [ ] Report pooled-pixel and per-ROI Dice/IoU, plus equal-weighted per-customer Dice/IoU, precision/recall, specificity, false-positive and false-negative rates. Model promotion must require both pooled-pixel and customer-macro Dice gates. Supplement with boundary F-score and region-specific performance where available.
 - [ ] Test makeup, skin/brow color, lighting, occlusion and uneven natural brows.
 - [ ] Visually verify the bundled parser's label mapping against the annotated salon set. A tensor shape check is not an accuracy test.
 - [ ] Define clinically/practically acceptable contour error before test evaluation. An internal Dice threshold alone is not a release decision.
