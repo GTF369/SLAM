@@ -3187,7 +3187,7 @@ class MainActivity : AppCompatActivity() {
                     return@setPositiveButton
                 }
                 val printProfileKey = printProfilePreferenceKey(printProfileName)
-                val correctionBase = if (resetPrintScale.isChecked) 1f else scaleForProfile(printProfileName)
+                val correctionBase = if (resetPrintScale.isChecked) 1f else printScaleForProfile(printProfileName)
                 val printScaleCorrection = measuredSquareMm?.let { correctionBase * 20f / it } ?: correctionBase
                 if (printScaleCorrection !in 0.80f..1.25f) {
                     Toast.makeText(this, "计算出的打印修正超出 0.80–1.25。请检查是否选择了实际尺寸、A4 纸张和正确的校准框，必要时重置比例。", Toast.LENGTH_LONG).show()
