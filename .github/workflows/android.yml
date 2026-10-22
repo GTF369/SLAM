@@ -116,7 +116,8 @@ jobs:
         run: |
           set -euo pipefail
           curl --fail --location --retry 3 --output /tmp/brow-public-smoke/images/virtual_makeup_demo.png https://raw.githubusercontent.com/otdnnc/virtual-makeup/main/apps/web/public/f.png
-          curl --fail --location --retry 3 --output /tmp/brow-public-smoke/images/opencv_lena.jpg https://raw.githubusercontent.com/opencv/opencv/4.x/samples/data/lena.jpg
+          # Public portrait from Unsplash. It is downloaded at test time and is not committed to the repository.
+          curl --fail --location --retry 3 --output /tmp/brow-public-smoke/images/unsplash_portrait.jpg 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=1000&q=85'
           file /tmp/brow-public-smoke/images/*
       - name: Run MediaPipe and eyebrow-mask smoke test on public images
         run: |
@@ -126,9 +127,10 @@ jobs:
             --images-dir /tmp/brow-public-smoke/images \
             --output-dir /tmp/brow-public-smoke/output
       - name: Upload public image smoke-test report and overlays
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: brow-public-image-smoke-results
           path: /tmp/brow-public-smoke/output/*
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
