@@ -1750,17 +1750,22 @@ class MainActivity : AppCompatActivity() {
             setText(currentCaseId)
             isEnabled = false
         }
+        val consent = CheckBox(this).apply {
+            text = "我已取得顾客同意，将匿名眉区测量值用于曲率研究和验证"
+            isChecked = false
+        }
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(8), dp(18), 0)
             addView(TextView(this@MainActivity).apply {
-                text = "用于建立个体和区域的实测曲率数据。用柔性尺测量皮肤表面弧长，同时记录同一段两端的直线距离。不要用照片像素代替实测毫米。系统还会按局部圆弧假设估计半径，该估计不是三维面部重建结果。"
+                text = "用于研究眉区实测弧长与弦长关系。请使用柔性尺测量，照片像素不能代替毫米。局部圆弧半径仅为几何近似，不是三维面部重建。不同意数据研究时请取消。"
                 textSize = 13f
             })
             addView(caseIdField)
             addView(region)
             addView(chord)
             addView(field)
+            addView(consent)
         }
         AlertDialog.Builder(this)
             .setTitle("眉弓曲率标定记录")
@@ -1817,7 +1822,14 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "实测修正系数 k = ${"%.3f".format(factor)}。\n" + radiusText + "\n" + interval, Toast.LENGTH_LONG).show()
             }
             .setNeutralButton("导出 CSV") { _, _ -> exportCurvatureCsv() }
-            .show()
+            .create().also { dialog ->
+                dialog.setOnShowListener {
+                    val saveButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                    saveButton.isEnabled = consent.isChecked
+                    consent.setOnCheckedChangeListener { _, checked -> saveButton.isEnabled = checked }
+                }
+                dialog.show()
+            }
     }
 
     private fun empiricalQuantile(values: List<Float>, probability: Double): Float {
@@ -2394,10 +2406,15 @@ class MainActivity : AppCompatActivity() {
             textSize = 12f
             setPadding(dp(18), dp(4), dp(18), dp(8))
         }
+        val consent = CheckBox(this).apply {
+            text = "我已取得顾客对本机保存人脸照片、识别轮廓和眉形方案的明确授权"
+            isChecked = false
+        }
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(note)
             addView(nameInput)
+            addView(consent)
         }
         AlertDialog.Builder(this)
             .setTitle("保存案例到本机")
@@ -2454,7 +2471,14 @@ class MainActivity : AppCompatActivity() {
                     }
                 }, "BrowCaseSave").start()
             }
-            .show()
+            .create().also { dialog ->
+                dialog.setOnShowListener {
+                    val saveButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                    saveButton.isEnabled = consent.isChecked
+                    consent.setOnCheckedChangeListener { _, checked -> saveButton.isEnabled = checked }
+                }
+                dialog.show()
+            }
     }
 
     private fun openSavedCaseLibrary() {
@@ -2656,17 +2680,22 @@ class MainActivity : AppCompatActivity() {
             text = "顾客最终选择此方案"
             isChecked = false
         }
+        val consent = CheckBox(this).apply {
+            text = "我已取得顾客同意，将匿名几何特征与本次偏好评分用于改进推荐模型"
+            isChecked = false
+        }
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(8), dp(20), 0)
             addView(TextView(this@MainActivity).apply {
-                text = "记录的是匿名几何特征、方案参数和顾客反馈，不保存照片或身份信息。需先获得顾客授权。"
+                text = "记录的是匿名几何特征、方案参数和顾客反馈，不保存照片或身份信息。不同意时可以取消，设计功能不受影响。"
                 textSize = 13f
             })
             addView(anonymousClientCode)
             addView(ratingLabel)
             addView(ratingBar)
             addView(selected)
+            addView(consent)
         }
         AlertDialog.Builder(this)
             .setTitle("记录顾客偏好")
@@ -2707,7 +2736,14 @@ class MainActivity : AppCompatActivity() {
                     .apply()
                 Toast.makeText(this, "已保存匿名偏好记录，可导出 CSV 用于后续模型训练", Toast.LENGTH_LONG).show()
             }
-            .show()
+            .create().also { dialog ->
+                dialog.setOnShowListener {
+                    val saveButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                    saveButton.isEnabled = consent.isChecked
+                    consent.setOnCheckedChangeListener { _, checked -> saveButton.isEnabled = checked }
+                }
+                dialog.show()
+            }
     }
 
     private fun showModelLicenseNotice() {
@@ -2831,6 +2867,10 @@ class MainActivity : AppCompatActivity() {
             textSize = 12f
             setPadding(dp(16), dp(4), dp(16), dp(8))
         }
+        val consent = CheckBox(this).apply {
+            text = "我已取得顾客同意，记录匿名的打印与转印几何误差"
+            isChecked = false
+        }
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(8), dp(18), 0)
@@ -2842,6 +2882,7 @@ class MainActivity : AppCompatActivity() {
             addView(skinArc)
             addView(printedPath)
             addView(endpointError)
+            addView(consent)
         }
         AlertDialog.Builder(this)
             .setTitle("打印与转印误差记录")
@@ -2895,7 +2936,14 @@ class MainActivity : AppCompatActivity() {
                     Toast.LENGTH_LONG
                 ).show()
             }
-            .show()
+            .create().also { dialog ->
+                dialog.setOnShowListener {
+                    val saveButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                    saveButton.isEnabled = consent.isChecked
+                    consent.setOnCheckedChangeListener { _, checked -> saveButton.isEnabled = checked }
+                }
+                dialog.show()
+            }
     }
 
     private fun csvCell(value: String): String {
