@@ -87,7 +87,7 @@ The eyebrow ROI training script reports pooled-pixel metrics as well as ROI-macr
 The Android app supports three segmentation paths:
 
 - **Customer-trained eyebrow model**: when `app/src/main/assets/brow_segmentation.tflite` exists with float32 input `[1,256,256,3]` and output `[1,256,256,1]`, it is preferred.
-- **EasyPortrait face parsing model**: the Android CI downloads a compact 19-channel ONNX model, using the inferred common 19-class label map. Its exact eyebrow mapping still needs visual validation against professionally annotated salon photos.
+- **EasyPortrait face parsing model**: the Android CI downloads the current 19-channel ONNX export. Public-image class contact sheets exposed that its brow channels do not match the assumed CelebAMask-HQ 19-class order. The Android engine and smoke test now use channels 2 and 3, as visually aligned with brows in the tested images. This is a label-index fix, not segmentation accuracy validation; professional brow-mask annotations and an independent client cohort remain necessary.
 - **Adaptive contrast fallback**: if inference is unavailable or weak, the app estimates brow pixels around landmarks. It remains manually editable and is not a precise segmentation guarantee.
 
 No customer-specific segmentation model is shipped without a consented, professionally annotated dataset. See [MODEL_PROVENANCE.md](../docs/MODEL_PROVENANCE.md) for model source/license caveats and [PRODUCT_VALIDATION_CHECKLIST.md](../docs/PRODUCT_VALIDATION_CHECKLIST.md) for the test gates.
