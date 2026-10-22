@@ -17,6 +17,8 @@ from pathlib import Path
 import numpy as np
 import tensorflow as tf
 
+from segmentation_metrics import evaluate_segmentation_predictions
+
 
 IMAGE_SIZE = 256
 
@@ -212,6 +214,12 @@ def main() -> None:
         verbose=2,
     )
     predicted = model.predict(x_test, batch_size=args.batch_size, verbose=0)
+    detailed_metrics = evaluate_segmentation_predictions(
+        y_test,
+        predicted,
+        groups[test_idx].tolist(),
+        threshold=0.5,
+    )
     metrics = {
         "model": "compact_brow_roi_unet",
         "input_shape": [1, IMAGE_SIZE, IMAGE_SIZE, 3],
@@ -223,10 +231,23 @@ def main() -> None:
         "train_rois": int(len(train_idx)),
         "validation_rois": int(len(val_idx)),
         "test_rois": int(len(test_idx)),
-        "test_dice": dice_score(y_test, predicted),
-        "test_iou": iou_score(y_test, predicted),
+        # Preserve the pooled-pixel fields used by the promotion gate for compatibility.
+        "test_dice": float(detailed_metrics["micro_dice"]),
+        "test_iou": float(detailed_metrics["micro_iou"]),
+        "test_pixel_precision": float(detailed_metrics["micro_precision"]),
+        "test_pixel_recall": float(detailed_metrics["micro_recall"]),
+        "test_pixel_specificity": float(detailed_metrics["micro_specificity"]),
+        "test_pixel_false_positive_rate": float(detailed_metrics["micro_false_positive_rate"]),
+        "test_pixel_false_negative_rate": float(detailed_metrics["micro_false_negative_rate"]),
+        "test_roi_macro_dice": float(detailed_metrics["roi_macro_dice"]),
+        "test_roi_macro_iou": float(detailed_metrics["roi_macro_iou"]),
+        "test_customer_macro_dice": float(detailed_metrics["customer_macro_dice"]),
+        "test_customer_macro_iou": float(detailed_metrics["customer_macro_iou"]),
+        "test_customer_macro_precision": float(detailed_metrics["customer_macro_precision"]),
+        "test_customer_macro_recall": float(detailed_metrics["customer_macro_recall"]),
+        "segmentation_metrics_by_level": detailed_metrics,
         "best_validation_loss": float(min(history.history.get("val_loss", [float("nan")]))),
-        "evaluation": "Untouched grouped test split, separated from train and early-stopping validation.",
+        "evaluation": "Untouched grouped test split. Reports pooled pixels, individual ROI averages, and equal-weighted anonymous-customer averages.",
         "warning": "Internal grouped test only. A separately collected prospective client set and target-device testing are required before practical reliance."
     }
 
