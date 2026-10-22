@@ -113,6 +113,8 @@ private data class RestoredBrowCase(
     val segmentationReviewed: Boolean,
     val showSegmentation: Boolean,
     val currentSegmentation: BrowSegmentationResult?,
+    val landmarks: List<PointF>,
+    val depths: List<Float>,
     val plans: List<BrowPlan>
 )
 
@@ -2087,6 +2089,8 @@ class MainActivity : AppCompatActivity() {
         reviewed: Boolean,
         showSegmentation: Boolean,
         currentSegmentation: BrowSegmentationResult?,
+        points: List<PointF>,
+        depths: List<Float>,
         plans: List<BrowPlan>
     ): Boolean {
         val directory = File(caseLibraryRoot(), recordId)
@@ -2123,6 +2127,17 @@ class MainActivity : AppCompatActivity() {
                 put("segmentation_reviewed", reviewed)
                 put("show_segmentation", showSegmentation)
                 put("current_segmentation", currentMask ?: org.json.JSONObject.NULL)
+                put("landmarks", org.json.JSONArray().apply {
+                    points.forEach { point ->
+                        put(org.json.JSONObject().apply {
+                            put("x", point.x.toDouble())
+                            put("y", point.y.toDouble())
+                        })
+                    }
+                })
+                put("landmark_depths", org.json.JSONArray().apply {
+                    depths.forEach { depth -> put(depth.toDouble()) }
+                })
                 put("plans", planJson)
                 put("storage_note", "Stored in app-private internal storage. This app does not upload the image. The image is not separately encrypted.")
             }
@@ -2160,6 +2175,11 @@ class MainActivity : AppCompatActivity() {
         val photo = capturedPhoto
         if (photo == null || photo.isRecycled) {
             Toast.makeText(this, "请先拍摄或导入照片并完成设计", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val currentPoints = browView.facePoints()
+        if (currentPoints.size < 400 || currentPoints.any { !it.x.isFinite() || !it.y.isFinite() }) {
+            Toast.makeText(this, "当前人脸关键点不足，无法保存可准确恢复的案例。请重新识别照片后再保存。", Toast.LENGTH_LONG).show()
             return
         }
         val nameInput = EditText(this).apply {
@@ -2200,12 +2220,16 @@ class MainActivity : AppCompatActivity() {
                 val reviewSnapshot = segmentationReviewed
                 val showSnapshot = showNativeSegmentation
                 val anonymousSnapshot = currentCaseId
+                val pointsSnapshot = currentPoints.map { PointF(it.x, it.y) }
+                val depthSnapshot = if (capturedLandmarkDepths.size == pointsSnapshot.size &&
+                    capturedLandmarkDepths.all { it.isFinite() }) capturedLandmarkDepths.toList() else emptyList()
                 status.text = "正在将案例保存到本机…"
                 Thread({
                     val saved = try {
                         writeCaseSnapshot(
                             recordId, displayName, anonymousSnapshot, photoSnapshot, paramsSnapshot,
-                            nativeSnapshot, reviewSnapshot, showSnapshot, currentMask, planSnapshots
+                            nativeSnapshot, reviewSnapshot, showSnapshot, currentMask,
+                            pointsSnapshot, depthSnapshot, planSnapshots
                         )
                     } catch (_: Exception) {
                         false
@@ -2326,21 +2350,53 @@ class MainActivity : AppCompatActivity() {
                     segmentationReviewed = manifest.optBoolean("segmentation_reviewed", false) && currentMask != null,
                     showSegmentation = manifest.optBoolean("show_segmentation", false),
                     currentSegmentation = currentMask,
+                    landmarks = emptyList(),
+                    depths = emptyList(),
                     plans = planList
                 )
-                detector = FaceLandmarker.createFromOptions(
-                    this@MainActivity,
-                    FaceLandmarker.FaceLandmarkerOptions.builder()
-                        .setBaseOptions(BaseOptions.builder().setModelAssetPath("face_landmarker.task").build())
-                        .setRunningMode(RunningMode.IMAGE)
-                        .setNumFaces(1)
-                        .build()
-                )
-                mpImage = BitmapImageBuilder(photo).build()
-                val landmarks = detector.detect(mpImage).faceLandmarks().firstOrNull()
-                points = landmarks?.map { PointF(it.x() * photo!!.width, it.y() * photo!!.height) } ?: emptyList()
-                depths = landmarks?.map { it.z() } ?: emptyList()
-                if (points.size < 400) throw IllegalStateException("无法在案例照片上重新定位人脸，原案例仍保留在本机")
+                val savedPoints = manifest.optJSONArray("landmarks")
+                val restoredPoints = if (savedPoints != null && savedPoints.length() >= 400) {
+                    List(savedPoints.length()) { index ->
+                        val row = savedPoints.optJSONObject(index)
+                            ?: throw IllegalStateException("案例关键点数据损坏")
+                        PointF(row.getDouble("x").toFloat(), row.getDouble("y").toFloat()).also { point ->
+                            if (!point.x.isFinite() || !point.y.isFinite()) {
+                                throw IllegalStateException("案例关键点包含无效坐标")
+                            }
+                        }
+                    }
+                } else {
+                    emptyList()
+                }
+                val savedDepths = manifest.optJSONArray("landmark_depths")
+                val restoredDepths = if (savedDepths != null && savedDepths.length() == restoredPoints.size) {
+                    List(savedDepths.length()) { index -> savedDepths.getDouble(index).toFloat() }
+                        .takeIf { values -> values.all { it.isFinite() } }.orEmpty()
+                } else {
+                    emptyList()
+                }
+                if (restoredPoints.size >= 400) {
+                    // Reuse the exact coordinates from the design session so reopening a case
+                    // cannot drift due to changed model weights, lighting, or another inference pass.
+                    points = restoredPoints
+                    depths = restoredDepths
+                } else {
+                    // Compatibility path for older case manifests without stored face geometry.
+                    detector = FaceLandmarker.createFromOptions(
+                        this@MainActivity,
+                        FaceLandmarker.FaceLandmarkerOptions.builder()
+                            .setBaseOptions(BaseOptions.builder().setModelAssetPath("face_landmarker.task").build())
+                            .setRunningMode(RunningMode.IMAGE)
+                            .setNumFaces(1)
+                            .build()
+                    )
+                    mpImage = BitmapImageBuilder(photo).build()
+                    val detected = detector.detect(mpImage).faceLandmarks().firstOrNull()
+                    points = detected?.map { PointF(it.x() * photo!!.width, it.y() * photo!!.height) } ?: emptyList()
+                    depths = detected?.map { it.z() } ?: emptyList()
+                }
+                restored = restored.copy(landmarks = points.map { PointF(it.x, it.y) }, depths = depths.toList())
+                if (points.size < 400) throw IllegalStateException("案例缺少有效的人脸关键点，且无法从照片恢复定位")
             } catch (e: Exception) {
                 error = e.message ?: "读取案例失败"
                 restored?.currentSegmentation?.overlay?.let { if (!it.isRecycled) it.recycle() }
