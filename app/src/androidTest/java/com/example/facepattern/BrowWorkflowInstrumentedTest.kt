@@ -91,6 +91,45 @@ class BrowWorkflowInstrumentedTest {
     }
 
     @Test
+    fun previewAndPlanBookExportsRequireConsent() {
+        launch(syntheticDesign = true)
+        assertTrue(
+            "Synthetic test design did not load",
+            device.wait(Until.hasObject(By.textContains("合成测试照片已加载")), TimeUnit.SECONDS.toMillis(5))
+        )
+
+        clickText("保存效果图")
+        assertTrue(
+            "Preview export dialog did not open",
+            device.wait(Until.hasObject(By.text("保存眉形效果图")), TimeUnit.SECONDS.toMillis(3))
+        )
+        val previewButton = device.findObject(By.text("保存效果图"))
+        assertNotNull("Preview export action missing", previewButton)
+        assertTrue("Preview export must be disabled before consent", !previewButton!!.isEnabled)
+        clickText("我已取得顾客同意，将包含人脸和眉形的效果图保存到相册")
+        assertTrue("Preview export should enable after consent", device.findObject(By.text("保存效果图")).isEnabled)
+        clickText("取消")
+
+        scrollTo("保存方案")
+        clickText("保存方案")
+        typeIntoOnlyDialogField("CI_EXPORT_PLAN")
+        clickText("保存")
+
+        scrollTo("导出方案册 PDF")
+        clickText("导出方案册 PDF")
+        assertTrue(
+            "Plan-book export dialog did not open",
+            device.wait(Until.hasObject(By.text("导出眉形方案册")), TimeUnit.SECONDS.toMillis(3))
+        )
+        val pdfButton = device.findObject(By.text("确认并导出"))
+        assertNotNull("Plan-book export action missing", pdfButton)
+        assertTrue("Plan-book export must be disabled before consent", !pdfButton!!.isEnabled)
+        clickText("我已取得顾客同意，将含人脸的方案预览导出为 PDF")
+        assertTrue("Plan-book export should enable after consent", device.findObject(By.text("确认并导出")).isEnabled)
+        clickText("取消")
+    }
+
+    @Test
     fun transferErrorRecordCanBeSavedAndExported() {
         launch(syntheticDesign = true)
         assertTrue(
