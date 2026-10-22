@@ -1095,8 +1095,13 @@ class MainActivity : AppCompatActivity() {
         if (::plansRow.isInitialized) refreshPlanButtons()
         capturedPhoto?.recycle()
         capturedPhoto = photo
-        capturedLandmarkDepths = if (normalizedDepths.size == photoPoints.size &&
-            normalizedDepths.all { it.isFinite() }) normalizedDepths.map { it * photo.width } else emptyList()
+        capturedLandmarkDepths = when {
+            restoredCase != null && restoredCase.depths.size == photoPoints.size &&
+                restoredCase.depths.all { it.isFinite() } -> restoredCase.depths.toList()
+            normalizedDepths.size == photoPoints.size && normalizedDepths.all { it.isFinite() } ->
+                normalizedDepths.map { it * photo.width }
+            else -> emptyList()
+        }
         designMode = true
         browView.setPhoto(photo)
         browView.setFacePoints(photoPoints)
@@ -2393,7 +2398,9 @@ class MainActivity : AppCompatActivity() {
                     mpImage = BitmapImageBuilder(photo).build()
                     val detected = detector.detect(mpImage).faceLandmarks().firstOrNull()
                     points = detected?.map { PointF(it.x() * photo!!.width, it.y() * photo!!.height) } ?: emptyList()
-                    depths = detected?.map { it.z() } ?: emptyList()
+                    // Match enterDesignMode's internal convention. MediaPipe relative z
+                    // scaled by photo width is still not a metric skin-surface measurement.
+                    depths = detected?.map { it.z() * photo!!.width } ?: emptyList()
                 }
                 restored = restored.copy(landmarks = points.map { PointF(it.x, it.y) }, depths = depths.toList())
                 if (points.size < 400) throw IllegalStateException("案例缺少有效的人脸关键点，且无法从照片恢复定位")
