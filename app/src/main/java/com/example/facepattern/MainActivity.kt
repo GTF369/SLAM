@@ -182,6 +182,13 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         buildUi()
+        // Instrumentation tests exercise local editing/storage without depending on the
+        // emulator's virtual camera or the native face-model runtime. Production launches
+        // never set this private test flag and follow the normal camera permission flow.
+        if (intent.getBooleanExtra("com.example.facepattern.INSTRUMENTATION_TEST_MODE", false)) {
+            status.text = "仪器测试模式。相机未启动。"
+            return
+        }
         if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             startFaceTracking()
         } else {
