@@ -68,6 +68,24 @@ class StencilTransferAnalysisTests(unittest.TestCase):
             {("printer-A", "左眉头"), ("printer-B", "左眉头"), ("printer-A", "右眉尾")},
         )
 
+    def test_curvature_methods_are_never_pooled_together(self):
+        baseline = row("A", printed="11.5", endpoint="1.0")
+        corrected = row("A", printed="10.1", endpoint="0.2")
+        corrected["curvature_method"] = "顾客实测区域长度修正"
+        summaries = summarize_transfer_rows([baseline, corrected], min_cases=2)
+        self.assertEqual(len(summaries), 2)
+        by_method = {item["curvature_method"]: item for item in summaries}
+        self.assertAlmostEqual(
+            by_method["无曲率修正"]["mean_absolute_length_error_mm"], 1.5
+        )
+        self.assertAlmostEqual(
+            by_method["顾客实测区域长度修正"]["mean_absolute_length_error_mm"], 0.1
+        )
+        self.assertEqual(
+            {item["region"] for item in summaries},
+            {"左眉身"},
+        )
+
     def test_invalid_physical_measurements_are_rejected(self):
         with self.assertRaises(ValueError):
             summarize_transfer_rows([row("A", skin="0")])
