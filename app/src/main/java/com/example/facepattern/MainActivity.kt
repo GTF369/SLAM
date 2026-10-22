@@ -6,7 +6,6 @@ import android.animation.ValueAnimator
 import android.app.AlertDialog
 import android.content.ContentValues
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -705,7 +704,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun decodeImportedPhoto(uri: Uri): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) } ?: return null
+        val boundsStream = contentResolver.openInputStream(uri) ?: return null
+        boundsStream.use { BitmapFactory.decodeStream(it, null, bounds) }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
         var sample = 1
         while (max(bounds.outWidth, bounds.outHeight) / sample > 4096) sample *= 2
