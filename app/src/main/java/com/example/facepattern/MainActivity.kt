@@ -2899,7 +2899,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun csvCell(value: String): String {
-        val safe = if (value.firstOrNull() in listOf('=', '+', '-', '@')) "'$value" else value
+        val safe = if (value.firstOrNull()?.let { it in setOf('=', '+', '-', '@') } == true) "'$value" else value
         return "\"${safe.replace("\"", "\"\"")}\""
     }
 
