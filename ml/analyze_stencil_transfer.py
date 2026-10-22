@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 REQUIRED = {
-    "case_id", "printer_profile", "region", "skin_arc_mm",
+    "case_id", "printer_profile", "region", "curvature_method", "skin_arc_mm",
     "printed_template_path_mm", "endpoint_alignment_error_mm",
 }
 
@@ -66,7 +66,7 @@ def summarize_transfer_rows(
     max_p90_endpoint_error_mm: float | None = None,
     min_endpoint_coverage: float = 0.80,
 ) -> list[dict[str, Any]]:
-    """Return one summary per printer profile and region.
+    """Return one summary per printer profile, eyebrow region and curvature method.
 
     Threshold-based screening is available only when both physical error tolerances
     are explicitly supplied. A pass means eligible for human review, never auto-release.
@@ -82,7 +82,7 @@ def summarize_transfer_rows(
         if value is not None and (not math.isfinite(value) or value <= 0):
             raise ValueError(f"{name} must be finite and positive")
 
-    grouped: dict[tuple[str, str, str], list[dict[str, float]]] = defaultdict(list)
+    grouped: dict[tuple[str, str, str, str], list[dict[str, float]]] = defaultdict(list)
     for line_no, row in enumerate(rows, start=2):
         missing = REQUIRED.difference(row.keys())
         if missing:
@@ -90,8 +90,11 @@ def summarize_transfer_rows(
         case_id = row.get("case_id", "").strip()
         profile = row.get("printer_profile", "").strip()
         region = row.get("region", "").strip()
-        if not case_id or not profile or not region:
-            raise ValueError(f"row {line_no} has an empty case_id, printer_profile, or region")
+        method = row.get("curvature_method", "").strip()
+        if not case_id or not profile or not region or not method:
+            raise ValueError(
+                f"row {line_no} has an empty case_id, printer_profile, region, or curvature_method"
+            )
         try:
             skin_arc = _finite_positive(row, "skin_arc_mm")
             printed_path = _finite_positive(row, "printed_template_path_mm")
@@ -104,7 +107,7 @@ def summarize_transfer_rows(
                     raise ValueError("endpoint_alignment_error_mm must be finite and non-negative")
         except (TypeError, ValueError) as exc:
             raise ValueError(f"row {line_no} contains invalid physical measurements: {exc}") from exc
-        grouped[(profile, region, case_id)].append({
+        grouped[(profile, region, method, case_id)].append({
             "signed_length_error_mm": signed_error,
             "absolute_length_error_mm": abs(signed_error),
             "endpoint_alignment_error_mm": (
@@ -112,15 +115,17 @@ def summarize_transfer_rows(
             ),
         })
 
-    by_profile_region: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    for (profile, region, case_id), repeated in grouped.items():
+    # Keep no-correction and measured-curvature samples separate. Pooling them would
+    # hide whether a correction method improves or worsens physical transfer error.
+    by_profile_region: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for (profile, region, method, case_id), repeated in grouped.items():
         length_errors = [r["signed_length_error_mm"] for r in repeated]
         absolute_errors = [r["absolute_length_error_mm"] for r in repeated]
         endpoint_errors = [
             r["endpoint_alignment_error_mm"] for r in repeated
             if math.isfinite(r["endpoint_alignment_error_mm"])
         ]
-        by_profile_region[(profile, region)].append({
+        by_profile_region[(profile, region, method)].append({
             "case_id": case_id,
             "signed_length_error_mm": statistics.fmean(length_errors),
             "absolute_length_error_mm": statistics.fmean(absolute_errors),
@@ -135,7 +140,7 @@ def summarize_transfer_rows(
         max_p90_abs_length_error_mm is not None
         and max_p90_endpoint_error_mm is not None
     )
-    for (profile, region), cases in sorted(by_profile_region.items()):
+    for (profile, region, method), cases in sorted(by_profile_region.items()):
         signed = [r["signed_length_error_mm"] for r in cases]
         absolute = [r["absolute_length_error_mm"] for r in cases]
         endpoint = [
@@ -164,6 +169,7 @@ def summarize_transfer_rows(
         summaries.append({
             "printer_profile": profile,
             "region": region,
+            "curvature_method": method,
             "n_measurements": sum(r["repeat_measurements"] for r in cases),
             "n_cases": len(cases),
             "mean_signed_length_error_mm": statistics.fmean(signed),
