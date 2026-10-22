@@ -104,6 +104,18 @@ private data class NativeBrowContour(
     val regionBounds: IntArray
 )
 
+private data class RestoredBrowCase(
+    val recordId: String,
+    val displayName: String,
+    val anonymousCaseId: String,
+    val currentParams: BrowParams,
+    val currentUseNativeShape: Boolean,
+    val segmentationReviewed: Boolean,
+    val showSegmentation: Boolean,
+    val currentSegmentation: BrowSegmentationResult?,
+    val plans: List<BrowPlan>
+)
+
 class MainActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
     private lateinit var browView: BrowDesignView
@@ -127,6 +139,9 @@ class MainActivity : AppCompatActivity() {
     private var imageExecutor: ExecutorService? = null
     private var captureInProgress = false
     private var currentCaseId: String = UUID.randomUUID().toString().take(8)
+    private var activeStoredCaseId: String? = null
+    private var activeStoredCaseName: String = ""
+    private var pendingRestoredCase: RestoredBrowCase? = null
     private val lastTimestamp = AtomicLong(0L)
     private val cameraPermission = 701
     private var frameWidth = 640
@@ -206,6 +221,7 @@ class MainActivity : AppCompatActivity() {
                 "导入照片" to { importPhotoFromGallery() }
             ))
             addButtonRow(this, listOf(
+                "本机案例库" to { openSavedCaseLibrary() },
                 "重置" to { browView.setParams(BrowParams()); params = BrowParams() }
             ))
         }
@@ -293,6 +309,10 @@ class MainActivity : AppCompatActivity() {
             }
         ))
         addButtonRow(designControls, listOf(
+            "撤销笔划" to { undoMaskStroke() },
+            "重做笔划" to { redoMaskStroke() }
+        ))
+        addButtonRow(designControls, listOf(
             "以原生眉形作底稿" to { toggleNativeShapeDesign() },
             "使用参数化底稿" to { toggleNativeShapeDesign(forceOff = true) }
         ))
@@ -325,6 +345,10 @@ class MainActivity : AppCompatActivity() {
             "方案对比" to { showComparison() },
             "保存效果图" to { savePreviewToGallery() },
             "1:1 打印" to { askPrintCalibration() }
+        ))
+        addButtonRow(designControls, listOf(
+            "保存本机案例" to { saveCurrentCaseToLibrary() },
+            "案例库" to { openSavedCaseLibrary() }
         ))
         addButtonRow(designControls, listOf(
             "导出方案册 PDF" to { exportPlanBookPdf() }
@@ -1039,6 +1063,16 @@ class MainActivity : AppCompatActivity() {
         normalizedDepths: List<Float> = emptyList()
     ) {
         stopTransition()
+        val restoredCase = pendingRestoredCase
+        pendingRestoredCase = null
+        if (restoredCase != null) {
+            activeStoredCaseId = restoredCase.recordId
+            activeStoredCaseName = restoredCase.displayName
+            currentCaseId = restoredCase.anonymousCaseId
+        } else {
+            activeStoredCaseId = null
+            activeStoredCaseName = ""
+        }
         // Keep the operator-confirmed anonymous case ID from the capture/import dialog.
         // The same ID can then group authorized preference ratings and repeat measures.
         segmentationGeneration++
@@ -1046,14 +1080,15 @@ class MainActivity : AppCompatActivity() {
         savedPlans.clear()
         if (::plansRow.isInitialized) refreshPlanButtons()
         segmentationResult?.overlay?.recycle()
-        segmentationResult = null
-        showNativeSegmentation = false
-        segmentationReviewed = false
-        useNativeShape = false
+        segmentationResult = restoredCase?.currentSegmentation
+        showNativeSegmentation = restoredCase?.showSegmentation ?: false
+        segmentationReviewed = restoredCase?.segmentationReviewed ?: false
+        useNativeShape = restoredCase?.currentUseNativeShape ?: false
         browView.setNativeShapeMode(false)
         if (::segmentationLabel.isInitialized) segmentationLabel.text = "原生眉区识别：尚未运行"
-        // Do not carry one customer's candidate plans into the next customer's session.
+        // A restored case owns its loaded snapshots. A new customer starts without old plans.
         savedPlans.clear()
+        if (restoredCase != null) savedPlans.addAll(restoredCase.plans)
         if (::plansRow.isInitialized) refreshPlanButtons()
         capturedPhoto?.recycle()
         capturedPhoto = photo
@@ -1065,9 +1100,11 @@ class MainActivity : AppCompatActivity() {
         previewView.visibility = View.GONE
         designControls.visibility = View.VISIBLE
         liveControls.visibility = View.GONE
-        params = BrowParams()
+        params = restoredCase?.currentParams ?: BrowParams()
         history.clear()
         browView.setParams(params)
+        browView.setSegmentationResult(segmentationResult, showNativeSegmentation)
+        browView.setNativeShapeMode(useNativeShape)
         syncSliders()
         refreshRecommendations(photoPoints)
         cameraProvider?.unbindAll()
@@ -1076,15 +1113,20 @@ class MainActivity : AppCompatActivity() {
         landmarker = null
         cameraExecutor?.shutdown()
         cameraExecutor = null
-        status.text = "高分辨率照片已分析，正在自动识别原生眉区并生成初稿。请核查识别轮廓后再用于打印。"
-        // Start the brow-region parser automatically so the first draft can follow
-        // the customer's natural brow contour without requiring an extra setup tap.
-        // The asynchronous result remains editable and is not treated as a final stencil.
-        runSegmentation()
+        status.text = if (restoredCase != null) {
+            "已恢复本机案例“${restoredCase.displayName}”。方案参数、已保存方案和已确认的识别轮廓已载入。请重新检查人脸定位后再打印。"
+        } else {
+            "高分辨率照片已分析，正在自动识别原生眉区并生成初稿。请核查识别轮廓后再用于打印。"
+        }
+        // New images start a fresh segmentation pass. Stored cases keep their reviewed
+        // mask snapshot so manual edits are not silently replaced by a new inference.
+        if (segmentationResult == null) runSegmentation()
     }
 
     private fun retakePhoto() {
         stopTransition()
+        activeStoredCaseId = null
+        activeStoredCaseName = ""
         segmentationGeneration++
         segmentationResult?.overlay?.recycle()
         segmentationResult = null
@@ -1892,6 +1934,28 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             .show()
+    }
+
+    private fun undoMaskStroke() {
+        if (browView.undoLastMaskStroke()) {
+            segmentationReviewed = false
+            useNativeShape = false
+            browView.setNativeShapeMode(false)
+            segmentationLabel.text = "已撤销上一笔掩膜编辑，请复核轮廓后点击“完成修正”。"
+        } else {
+            Toast.makeText(this, "没有可撤销的掩膜笔划", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun redoMaskStroke() {
+        if (browView.redoLastMaskStroke()) {
+            segmentationReviewed = false
+            useNativeShape = false
+            browView.setNativeShapeMode(false)
+            segmentationLabel.text = "已重做掩膜笔划，请复核轮廓后点击“完成修正”。"
+        } else {
+            Toast.makeText(this, "没有可重做的掩膜笔划", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun recordPreference() {
