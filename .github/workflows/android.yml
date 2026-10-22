@@ -83,18 +83,47 @@ jobs:
           disable-animations: true
           script: |
             set -euo pipefail
-            gradle --no-daemon clean connectedDebugAndroidTest -PemulatorSmoke=true
+            adb devices
+            adb wait-for-device
+            adb shell getprop sys.boot_completed
             adb logcat -c
-            adb shell pm grant com.example.facepattern android.permission.CAMERA
+            if ! timeout 15m gradle --no-daemon clean connectedDebugAndroidTest -PemulatorSmoke=true; then
+              status=$?
+              echo "Android instrumentation tests failed or timed out (exit $status)"
+              adb devices || true
+              adb shell dumpsys activity activities || true
+              adb logcat -d -s AndroidRuntime:E || true
+              find app/build/outputs/androidTest-results app/build/reports/androidTests -maxdepth 5 -type f -print || true
+              exit "${status:-1}"
+            fi
+            if ! adb shell pm grant com.example.facepattern android.permission.CAMERA; then
+              adb logcat -d -s AndroidRuntime:E || true
+              exit 1
+            fi
             adb shell am start -W -n com.example.facepattern/.MainActivity
             sleep 8
-            adb shell pidof com.example.facepattern
+            if ! adb shell pidof com.example.facepattern; then
+              adb logcat -d -s AndroidRuntime:E || true
+              echo "App process exited after launcher start"
+              exit 1
+            fi
             if adb logcat -d -s AndroidRuntime:E | grep -q "FATAL EXCEPTION"; then
               adb logcat -d -s AndroidRuntime:E
               echo "Android emulator reported a fatal app exception"
               exit 1
             fi
+      - name: Upload Android instrumentation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-instrumentation-reports
+          path: |
+            app/build/outputs/androidTest-results/connected/**
+            app/build/reports/androidTests/connected/**
+          if-no-files-found: warn
+          retention-days: 14
       - name: Upload OPPO ARM64 APK artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: face-pattern-oppo-debug-apk
