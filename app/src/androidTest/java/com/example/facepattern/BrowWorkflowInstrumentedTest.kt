@@ -82,6 +82,7 @@ class BrowWorkflowInstrumentedTest {
         fields[1].text = "10.0"
         fields[2].text = "10.5"
         fields[3].text = "1.2"
+        clickText("我已取得顾客同意，记录匿名的打印与转印几何误差")
         clickText("保存验证记录")
 
         scrollTo("导出转印验证 CSV")
@@ -120,6 +121,7 @@ class BrowWorkflowInstrumentedTest {
             device.wait(Until.hasObject(By.text("保存案例到本机")), TimeUnit.SECONDS.toMillis(3))
         )
         typeIntoOnlyDialogField("CI持久化案例")
+        clickText("我已取得顾客对本机保存人脸照片、识别轮廓和眉形方案的明确授权")
         clickText("保存")
         assertTrue(
             "Case save did not finish",
