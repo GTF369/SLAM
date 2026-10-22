@@ -3948,16 +3948,32 @@ private object BrowRenderer {
         val workingPoints = if (curvatureFactors.isEmpty()) {
             ordered
         } else {
-            val cumulative = mutableListOf(ordered.first().x)
+            // Apply the dimensionless surface/chord factor along each complete 2D
+            // landmark segment. Scaling only dx distorts sloped eyebrow segments by
+            // changing width while leaving vertical displacement untouched.
+            val cumulative = mutableListOf(PointF(ordered.first().x, ordered.first().y))
             for (i in 0 until ordered.lastIndex) {
                 val rawFactor = curvatureFactors[segmentRegions[i]] ?: 1f
                 val factor = rawFactor.coerceIn(1f, 1.4f)
                 val dx = ordered[i + 1].x - ordered[i].x
-                cumulative.add(cumulative.last() + dx * factor)
+                val dy = ordered[i + 1].y - ordered[i].y
+                val previous = cumulative.last()
+                cumulative.add(PointF(previous.x + dx * factor, previous.y + dy * factor))
             }
-            val originalCenter = (ordered.first().x + ordered.last().x) / 2f
-            val correctedCenter = (cumulative.first() + cumulative.last()) / 2f
-            ordered.mapIndexed { index, point -> PointF(cumulative[index] + originalCenter - correctedCenter, point.y) }
+            val originalCenter = PointF(
+                (ordered.first().x + ordered.last().x) / 2f,
+                (ordered.first().y + ordered.last().y) / 2f
+            )
+            val correctedCenter = PointF(
+                (cumulative.first().x + cumulative.last().x) / 2f,
+                (cumulative.first().y + cumulative.last().y) / 2f
+            )
+            cumulative.map { point ->
+                PointF(
+                    point.x + originalCenter.x - correctedCenter.x,
+                    point.y + originalCenter.y - correctedCenter.y
+                )
+            }
         }
         val anchorStart = workingPoints.first()
         val anchorEnd = workingPoints.last()
