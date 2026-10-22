@@ -70,6 +70,8 @@ class BrowWorkflowInstrumentedTest {
         assertNotNull(device.findObject(By.text("拍照设计")))
         assertNotNull(device.findObject(By.text("导入照片")))
         assertNotNull(device.findObject(By.text("本机案例库")))
+        assertNotNull(device.findObject(By.text("导出加密案例")))
+        assertNotNull(device.findObject(By.text("导入加密案例")))
         assertTrue(device.hasObject(By.text("仪器测试模式。相机未启动。")))
     }
 
