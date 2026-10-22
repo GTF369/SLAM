@@ -137,6 +137,26 @@ class BrowDesignSmokeTest {
             selectedPixelCount = 1,
             regions = listOf(intArrayOf(25, 22, 45, 30), intArrayOf(50, 22, 70, 30))
         )
+        val points = List(478) { android.graphics.PointF(48f, 48f) }.toMutableList().apply {
+            this[10] = android.graphics.PointF(48f, 10f)
+            this[152] = android.graphics.PointF(48f, 90f)
+            this[234] = android.graphics.PointF(20f, 60f)
+            this[454] = android.graphics.PointF(76f, 60f)
+            this[33] = android.graphics.PointF(35f, 40f)
+            this[263] = android.graphics.PointF(61f, 40f)
+            this[172] = android.graphics.PointF(25f, 75f)
+            this[397] = android.graphics.PointF(71f, 75f)
+            this[70] = android.graphics.PointF(29f, 33f)
+            this[63] = android.graphics.PointF(32f, 31f)
+            this[105] = android.graphics.PointF(36f, 30f)
+            this[66] = android.graphics.PointF(39f, 31f)
+            this[107] = android.graphics.PointF(42f, 33f)
+            this[300] = android.graphics.PointF(54f, 33f)
+            this[293] = android.graphics.PointF(57f, 31f)
+            this[334] = android.graphics.PointF(60f, 30f)
+            this[296] = android.graphics.PointF(63f, 31f)
+            this[336] = android.graphics.PointF(66f, 33f)
+        }
         try {
             assertTrue("MainActivity did not become visible", device.wait(Until.hasObject(By.text("眉形设计助手")), 10_000))
             scenario.onActivity { activity ->
@@ -147,6 +167,14 @@ class BrowDesignSmokeTest {
                 MainActivity::class.java.getDeclaredField("segmentationResult").apply {
                     isAccessible = true
                     set(activity, segmentation)
+                }
+                MainActivity::class.java.getDeclaredField("browView").apply {
+                    isAccessible = true
+                }.get(activity).javaClass.getDeclaredMethod("setFacePoints", List::class.java).apply {
+                    isAccessible = true
+                    invoke(MainActivity::class.java.getDeclaredField("browView").apply {
+                        isAccessible = true
+                    }.get(activity), points)
                 }
                 MainActivity::class.java.getDeclaredField("showNativeSegmentation").apply {
                     isAccessible = true
