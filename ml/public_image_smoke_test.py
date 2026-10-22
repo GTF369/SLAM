@@ -161,8 +161,21 @@ def run_case(image_path: Path, case_name: str, landmarker, session, out_dir: Pat
     counts = np.bincount(labels.reshape(-1), minlength=19)
     report["parser_inference_ms_cpu"] = round(onnx_ms, 2)
     report["parser_output_shape"] = list(logits.shape)
+    report["face_crop_xyxy"] = [crop_left, crop_top, crop_left + side, crop_top + side]
     report["parser_class_pixels"] = {str(i): int(counts[i]) for i in range(19)}
     report["class_6_7_pixels_percent_of_face_crop"] = round(float(np.mean((labels == 6) | (labels == 7)) * 100), 3)
+    local_brow_labels = (labels == 6) | (labels == 7)
+    ys, xs = np.where(local_brow_labels)
+    if len(xs):
+        report["class_6_7_bbox_model_xyxy"] = [int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1]
+        source_x0 = max(0, crop_left + int(xs.min() * side / PARSING_SIZE))
+        source_y0 = max(0, crop_top + int(ys.min() * side / PARSING_SIZE))
+        source_x1 = min(w, crop_left + int((xs.max() + 1) * side / PARSING_SIZE) + 1)
+        source_y1 = min(h, crop_top + int((ys.max() + 1) * side / PARSING_SIZE) + 1)
+        report["class_6_7_bbox_source_xyxy_approx"] = [source_x0, source_y0, source_x1, source_y1]
+    else:
+        report["class_6_7_bbox_model_xyxy"] = None
+        report["class_6_7_bbox_source_xyxy_approx"] = None
     report["roi_results"] = []
     final_mask = np.zeros((h, w), dtype=bool)
 
@@ -201,7 +214,25 @@ def run_case(image_path: Path, case_name: str, landmarker, session, out_dir: Pat
         cv2.rectangle(overlay, (x0, y0), (x1 - 1, y1 - 1), (255, 60, 30), 1)
     output_path = out_dir / f"{case_name}_brow_overlay.jpg"
     Image.fromarray(overlay).save(output_path, quality=90)
+    # Separate the model-only labels from the fallback path to debug coordinate
+    # transforms and label-map assumptions. The source is the same crop used by the app.
+    face_crop_mask = Image.fromarray((local_brow_labels.astype(np.uint8) * 255)).resize(
+        (side, side), Image.Resampling.NEAREST
+    )
+    model_only = np.zeros((h, w), dtype=bool)
+    model_only[crop_top:crop_top + side, crop_left:crop_left + side] = np.asarray(face_crop_mask) > 0
+    model_overlay = image.copy()
+    orange = np.zeros_like(model_overlay)
+    orange[:, :, 0] = 255
+    orange[:, :, 1] = 70
+    model_overlay[model_only] = (
+        model_overlay[model_only].astype(np.float32) * 0.42
+        + orange[model_only].astype(np.float32) * 0.58
+    ).clip(0, 255).astype(np.uint8)
+    model_path = out_dir / f"{case_name}_model_classes_6_7.jpg"
+    Image.fromarray(model_overlay).save(model_path, quality=90)
     report["preview_file"] = output_path.name
+    report["model_only_preview_file"] = model_path.name
     report["total_final_mask_pixels"] = int(final_mask.sum())
     report["total_final_mask_fraction_of_image"] = round(float(final_mask.mean()), 6)
     report["status"] = "PASS_SMOKE_ONLY" if final_mask.sum() > 0 else "FAIL"
