@@ -124,12 +124,37 @@ class BrowDesignSmokeTest {
         val photo = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888).apply {
             eraseColor(Color.rgb(180, 160, 145))
         }
+        val mask = Bitmap.createBitmap(60, 20, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(Color.TRANSPARENT)
+            setPixel(8, 6, Color.argb(172, 71, 190, 157))
+        }
+        val segmentation = BrowSegmentationResult(
+            overlay = mask,
+            offsetX = 20,
+            offsetY = 20,
+            method = "instrumentation test mask",
+            maskQualityScore = 0.5f,
+            selectedPixelCount = 1,
+            regions = listOf(intArrayOf(25, 22, 45, 30), intArrayOf(50, 22, 70, 30))
+        )
         try {
             assertTrue("MainActivity did not become visible", device.wait(Until.hasObject(By.text("眉形设计助手")), 10_000))
             scenario.onActivity { activity ->
                 MainActivity::class.java.getDeclaredField("capturedPhoto").apply {
                     isAccessible = true
                     set(activity, photo)
+                }
+                MainActivity::class.java.getDeclaredField("segmentationResult").apply {
+                    isAccessible = true
+                    set(activity, segmentation)
+                }
+                MainActivity::class.java.getDeclaredField("showNativeSegmentation").apply {
+                    isAccessible = true
+                    setBoolean(activity, true)
+                }
+                MainActivity::class.java.getDeclaredField("segmentationReviewed").apply {
+                    isAccessible = true
+                    setBoolean(activity, true)
                 }
                 MainActivity::class.java.getDeclaredField("currentCaseId").apply {
                     isAccessible = true
@@ -153,8 +178,12 @@ class BrowDesignSmokeTest {
             val savedDirectory = caseDirectory ?: throw AssertionError("Case manifest was not written")
             val manifest = File(savedDirectory, "case.json")
             assertTrue(manifest.readText(Charsets.UTF_8).contains("QA_CASE_2026"))
-            val photoName = org.json.JSONObject(manifest.readText(Charsets.UTF_8)).getString("photo_file")
-            assertTrue("Persisted case photo is missing", File(caseDirectory, photoName).isFile)
+            val manifestJson = org.json.JSONObject(manifest.readText(Charsets.UTF_8))
+            val photoName = manifestJson.getString("photo_file")
+            assertTrue("Persisted case photo is missing", File(savedDirectory, photoName).isFile)
+            val maskMetadata = manifestJson.getJSONObject("current_segmentation")
+            val maskName = maskMetadata.getString("mask_file")
+            assertTrue("Persisted segmentation mask is missing", File(savedDirectory, maskName).isFile)
 
             scenario.onActivity { activity ->
                 MainActivity::class.java.getDeclaredMethod("openSavedCaseLibrary").apply {
@@ -170,6 +199,7 @@ class BrowDesignSmokeTest {
         } finally {
             scenario.close()
             if (!photo.isRecycled) photo.recycle()
+            if (!mask.isRecycled) mask.recycle()
             root.deleteRecursively()
         }
     }
