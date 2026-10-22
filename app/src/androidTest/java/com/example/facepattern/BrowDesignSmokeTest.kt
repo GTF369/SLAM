@@ -1,6 +1,7 @@
 package com.example.facepattern
 
 import android.Manifest
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.view.MotionEvent
@@ -23,6 +24,13 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class BrowDesignSmokeTest {
+    private fun launchInTestMode(): ActivityScenario<MainActivity> {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val intent = Intent(context, MainActivity::class.java)
+            .putExtra("com.example.facepattern.INSTRUMENTATION_TEST_MODE", true)
+        return ActivityScenario.launch(intent)
+    }
+
     @get:Rule
     val grantCameraPermission: GrantPermissionRule =
         GrantPermissionRule.grant(Manifest.permission.CAMERA)
@@ -31,7 +39,7 @@ class BrowDesignSmokeTest {
     fun maskStrokeCanBeUndoneAndRedone() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val device = UiDevice.getInstance(instrumentation)
-        val scenario = ActivityScenario.launch(MainActivity::class.java)
+        val scenario = launchInTestMode()
         val photo = Bitmap.createBitmap(400, 300, Bitmap.Config.ARGB_8888).apply {
             eraseColor(Color.LTGRAY)
         }
@@ -120,7 +128,7 @@ class BrowDesignSmokeTest {
         val context = instrumentation.targetContext
         val root = File(context.filesDir, "brow_cases")
         root.deleteRecursively()
-        val scenario = ActivityScenario.launch(MainActivity::class.java)
+        val scenario = launchInTestMode()
         val photo = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888).apply {
             eraseColor(Color.rgb(180, 160, 145))
         }
