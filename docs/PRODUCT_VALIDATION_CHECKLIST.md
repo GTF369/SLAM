@@ -29,7 +29,7 @@ Use this list to distinguish code completion, automated tests, device testing an
 - [ ] Compute summaries after averaging repeats within each anonymous customer. Report the case-level P10–P90 empirical range separately from the bootstrap confidence interval of the mean.
 - [ ] Reserve customers for independent coverage validation. Evaluate whether regional prediction ranges cover actual surface-length discrepancy at the stated rate.
 - [ ] Compare the design, corrected template, printed stencil and actual transfer on skin by region and side. Export transfer-validation CSV and analyze by printer profile / region with `ml/analyze_stencil_transfer.py`, keeping all repeat measurements from a customer in the same statistical group.
-- [ ] No fixed correction interval should be activated by default until independent measurement and transfer accuracy is demonstrated.
+- [ ] No fixed correction interval should be activated by default until independent measurement and transfer accuracy is demonstrated. The current app does not permit MediaPipe relative-z estimates to modify physical print geometry.
 
 ## D. Android and printer
 
