@@ -3259,6 +3259,12 @@ private object BrowRecommendationEngine {
 }
 
 private class BrowDesignView(context: Context) : View(context) {
+    private data class MaskStroke(val before: Map<Int, Int>, val after: Map<Int, Int>)
+
+    private val maskUndoStack = mutableListOf<MaskStroke>()
+    private val maskRedoStack = mutableListOf<MaskStroke>()
+    private var activeStrokeBefore: LinkedHashMap<Int, Int>? = null
+
     private var photo: Bitmap? = null
     private var points: List<PointF> = emptyList()
     private var params: BrowParams = BrowParams()
@@ -3283,6 +3289,11 @@ private class BrowDesignView(context: Context) : View(context) {
     private var includeEditedPixels: Boolean = true
 
     fun setSegmentationResult(result: BrowSegmentationResult?, visible: Boolean) {
+        if (segmentationResult?.overlay !== result?.overlay) {
+            maskUndoStack.clear()
+            maskRedoStack.clear()
+            activeStrokeBefore = null
+        }
         segmentationResult = result
         showSegmentation = visible
         nativeContours = result?.let { BrowRenderer.extractNativeContours(it) } ?: emptyList()
@@ -3303,15 +3314,101 @@ private class BrowDesignView(context: Context) : View(context) {
         invalidate()
     }
 
+    fun canUndoMaskStroke(): Boolean = maskUndoStack.isNotEmpty()
+    fun canRedoMaskStroke(): Boolean = maskRedoStack.isNotEmpty()
+
+    fun undoLastMaskStroke(): Boolean {
+        if (maskUndoStack.isEmpty()) return false
+        val action = maskUndoStack.removeAt(maskUndoStack.lastIndex)
+        applyPixelState(action.before)
+        maskRedoStack.add(action)
+        refreshContoursAfterMaskEdit()
+        return true
+    }
+
+    fun redoLastMaskStroke(): Boolean {
+        if (maskRedoStack.isEmpty()) return false
+        val action = maskRedoStack.removeAt(maskRedoStack.lastIndex)
+        applyPixelState(action.after)
+        maskUndoStack.add(action)
+        refreshContoursAfterMaskEdit()
+        return true
+    }
+
+    private fun applyPixelState(state: Map<Int, Int>) {
+        val overlay = segmentationResult?.overlay ?: return
+        if (overlay.isRecycled || state.isEmpty()) return
+        val pixels = IntArray(overlay.width * overlay.height)
+        overlay.getPixels(pixels, 0, overlay.width, 0, 0, overlay.width, overlay.height)
+        state.forEach { (index, color) ->
+            if (index in pixels.indices) pixels[index] = color
+        }
+        overlay.setPixels(pixels, 0, overlay.width, 0, 0, overlay.width, overlay.height)
+    }
+
+    private fun refreshContoursAfterMaskEdit() {
+        val result = segmentationResult
+        nativeContours = if (result == null || result.overlay.isRecycled) emptyList()
+            else BrowRenderer.extractNativeContours(result)
+        if (useNativeShape && nativeContours.isEmpty()) useNativeShape = false
+        invalidate()
+    }
+
+    private fun rememberPixelsBeforeDab(overlay: Bitmap, centerX: Float, centerY: Float, radius: Float) {
+        val before = activeStrokeBefore ?: return
+        val x0 = kotlin.math.floor(centerX - radius - 1f).toInt().coerceIn(0, overlay.width - 1)
+        val y0 = kotlin.math.floor(centerY - radius - 1f).toInt().coerceIn(0, overlay.height - 1)
+        val x1 = kotlin.math.ceil(centerX + radius + 1f).toInt().coerceIn(0, overlay.width - 1)
+        val y1 = kotlin.math.ceil(centerY + radius + 1f).toInt().coerceIn(0, overlay.height - 1)
+        for (y in y0..y1) {
+            val row = y * overlay.width
+            for (x in x0..x1) {
+                val index = row + x
+                if (!before.containsKey(index)) before[index] = overlay.getPixel(x, y)
+            }
+        }
+    }
+
+    private fun finishMaskStroke() {
+        val before = activeStrokeBefore ?: return
+        activeStrokeBefore = null
+        val result = segmentationResult ?: return
+        if (before.isEmpty() || result.overlay.isRecycled) return
+        val after = LinkedHashMap<Int, Int>(before.size)
+        before.keys.forEach { index ->
+            val x = index % result.overlay.width
+            val y = index / result.overlay.width
+            after[index] = result.overlay.getPixel(x, y)
+        }
+        maskUndoStack.add(MaskStroke(before.toMap(), after.toMap()))
+        if (maskUndoStack.size > 30) maskUndoStack.removeAt(0)
+        maskRedoStack.clear()
+        refreshContoursAfterMaskEdit()
+    }
+
     override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
-        if (!editSegmentationMask || !showSegmentation || event.action !in listOf(
+        if (!editSegmentationMask || !showSegmentation || event.actionMasked !in listOf(
                 android.view.MotionEvent.ACTION_DOWN,
                 android.view.MotionEvent.ACTION_MOVE,
-                android.view.MotionEvent.ACTION_UP
+                android.view.MotionEvent.ACTION_UP,
+                android.view.MotionEvent.ACTION_CANCEL
             )) return super.onTouchEvent(event)
         val image = photo ?: return false
         val result = segmentationResult ?: return false
         if (image.isRecycled || result.overlay.isRecycled) return false
+
+        if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+            activeStrokeBefore = LinkedHashMap()
+            maskRedoStack.clear()
+        }
+        if (event.actionMasked == android.view.MotionEvent.ACTION_CANCEL) {
+            val before = activeStrokeBefore
+            activeStrokeBefore = null
+            if (before != null) applyPixelState(before)
+            refreshContoursAfterMaskEdit()
+            return true
+        }
+
         val scale = max(width.toFloat() / image.width.coerceAtLeast(1), height.toFloat() / image.height.coerceAtLeast(1))
         val imageLeft = (width - image.width * scale) / 2f
         val imageTop = (height - image.height * scale) / 2f
@@ -3321,9 +3418,12 @@ private class BrowDesignView(context: Context) : View(context) {
         val maskY = imageY - result.offsetY
         if (maskX < 0f || maskX >= result.overlay.width.toFloat() ||
             maskY < 0f || maskY >= result.overlay.height.toFloat()) {
+            if (event.actionMasked == android.view.MotionEvent.ACTION_UP) finishMaskStroke()
             return true
         }
+
         val brushRadius = max(4f, (8f * resources.displayMetrics.density) / scale)
+        rememberPixelsBeforeDab(result.overlay, maskX, maskY, brushRadius)
         val maskCanvas = Canvas(result.overlay)
         val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
@@ -3336,10 +3436,7 @@ private class BrowDesignView(context: Context) : View(context) {
             }
         }
         maskCanvas.drawCircle(maskX, maskY, brushRadius, maskPaint)
-        if (event.action == android.view.MotionEvent.ACTION_UP) {
-            nativeContours = BrowRenderer.extractNativeContours(result)
-            if (useNativeShape && nativeContours.isEmpty()) useNativeShape = false
-        }
+        if (event.actionMasked == android.view.MotionEvent.ACTION_UP) finishMaskStroke()
         invalidate()
         return true
     }
