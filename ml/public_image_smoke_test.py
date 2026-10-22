@@ -2,8 +2,9 @@
 """Smoke-test the exact bundled MediaPipe and EasyPortrait ONNX assets on public photos.
 
 This is a pipeline smoke test, not a segmentation accuracy benchmark: test photos have
-no professionally annotated eyebrow masks. It uses the app's crop, normalization,
-class 6/7 mapping, ROI bounds and adaptive-contrast fallback.
+no professionally annotated eyebrow masks. It mirrors the app's face crop, normalization,
+class 2/3 label mapping, ROI bounds and adaptive-contrast fallback. A PASS does not prove
+eyebrow-mask accuracy or execute the Android APK on an Android runtime.
 """
 from __future__ import annotations
 
