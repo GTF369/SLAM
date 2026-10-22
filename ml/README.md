@@ -69,6 +69,24 @@ python ml/analyze_curvature.py brow_curvature_calibration.csv --output curvature
 
 For each region, the script first computes the mean repeated measurements within each anonymous customer. Population summaries and the P10–P90 empirical interval are then calculated from those **case-level means**, so a customer with extra repeated measurements cannot dominate the interval. It also reports the number of raw measurements, number of cases, observed case-level range, bootstrap 95% confidence interval for the population mean, and case-level radius summaries when available.
 
+For physical print-to-skin validation, the app also exports a separate transfer-validation CSV after the operator measures the printed template and its transferred placement. Analyze it with:
+
+```bash
+python ml/analyze_stencil_transfer.py brow_transfer_validation.csv --output stencil_transfer_summary.csv
+```
+
+Rows are grouped by printer profile and eyebrow region. Repeated observations are averaged within anonymous customer before summaries and bootstrap intervals are computed. The report includes signed and absolute template-length error, P90 absolute error, endpoint-placement error, sample coverage and customer counts. To run a predeclared engineering screen, supply both tolerances and the minimum case count, for example:
+
+```bash
+python ml/analyze_stencil_transfer.py brow_transfer_validation.csv \\
+  --min-cases 30 \\
+  --max-p90-abs-length-error-mm 1.0 \\
+  --max-p90-endpoint-error-mm 1.5 \\
+  --output stencil_transfer_summary.csv
+```
+
+The tolerance values above are illustrative command-line examples, **not clinically validated limits or universal standards**. Set permissible error margins with the practicing artist and intended workflow before collecting validation data. A screening pass only means the group is eligible for human review. The script never produces or applies an automatic correction coefficient, and it cannot establish 3D surface accuracy by itself.
+
 The P10–P90 interval is a descriptive central range of the observed customers. It is not a guaranteed anatomical bound, an individual prediction interval, or by itself a correction recommendation. The bootstrap interval refers to uncertainty in the population mean, not the range that will contain 90% of individual customers. Legacy CSV files without a `case_id` cannot group repeated measurements and are explicitly warned about.
 
 The directly measured ratio is
