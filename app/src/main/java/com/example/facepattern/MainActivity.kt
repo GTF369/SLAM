@@ -345,6 +345,10 @@ class MainActivity : AppCompatActivity() {
                 "本机案例库" to { openSavedCaseLibrary() },
                 "重置" to { browView.setParams(BrowParams()); params = BrowParams() }
             ))
+            addButtonRow(this, listOf(
+                "导出加密案例" to { exportPortableCaseBackup() },
+                "导入加密案例" to { launchPortableCaseImport() }
+            ))
         }
         panel.addView(liveControls)
 
@@ -2848,13 +2852,16 @@ class MainActivity : AppCompatActivity() {
         require(referenced.contains(photoName)) { "备份缺少案例照片" }
         archive.files.forEach { (name, bytes) ->
             require(name in referenced) { "备份包含不属于当前案例的文件" }
-            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                ?: throw IllegalArgumentException("备份图像解码失败：$name")
-            require(bitmap.width in 1..12000 && bitmap.height in 1..12000) {
-                bitmap.recycle()
-                "备份图像尺寸超出安全范围：$name"
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            val pixels = bounds.outWidth.toLong() * bounds.outHeight.toLong()
+            require(
+                bounds.outWidth in 1..8000 &&
+                    bounds.outHeight in 1..8000 &&
+                    pixels in 1..16_000_000L
+            ) {
+                "备份图像尺寸无效或超过安全限制：$name"
             }
-            bitmap.recycle()
         }
     }
 
