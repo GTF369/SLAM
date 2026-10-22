@@ -35,18 +35,23 @@ private data class FaceParsingMap(
 /**
  * Brow-region pre-segmentation.
  *
- * When the LiteRT faceparsing.tflite model is present, classes 2 and 3 are used
- * as the left/right eyebrow masks. The model is run on a square crop of the full
- * face because it was trained for whole-face parsing, not isolated brow crops.
- * If loading or inference fails, the engine falls back to an adaptive local mask.
- * The learned model is a starting point and still requires professional review.
+ * A customer-trained LiteRT model, when installed, predicts a single-channel brow
+ * mask on each eyebrow ROI. Otherwise the EasyPortrait ONNX parser is run on a
+ * square full-face crop. Runtime inspection of the bundled ONNX export on public
+ * test portraits showed channels 2 and 3 align with the two eyebrow regions, while
+ * the previously assumed 6/7 channels align with eye/lip regions. The parser mask
+ * remains a draft requiring professional review. Weak or empty masks fall back to
+ * an editable adaptive-contrast mask.
  */
 internal object BrowSegmentationEngine {
     private const val PARSING_MODEL_SIZE = 384
     private const val CUSTOM_MODEL_SIZE = 256
-    // The actual downloaded ONNX tensor has 19 channels, despite the model card's
-    // 8-class summary. This is the common CelebAMask-HQ face-parsing label order.
+    // The exported ONNX tensor has 19 channels, while the model card documents an
+    // 8-class EasyPortrait face-parsing label set. Public-image channel visualization
+    // identified 2 and 3 as brow channels. Do not assume CelebAMask-HQ's 19-class map.
     private const val PARSING_CLASSES = 19
+    private const val LEFT_BROW_CLASS = 2
+    private const val RIGHT_BROW_CLASS = 3
     // EasyPortrait face-parsing BGR input statistics, applied to pixel values in [0,255].
     private val meanBgr = floatArrayOf(143.55267f, 132.96706f, 126.94924f)
     private val stdBgr = floatArrayOf(60.26253f, 60.32740f, 59.30989f)
@@ -395,8 +400,9 @@ internal object BrowSegmentationEngine {
                     .toInt()
                 if (modelX in 0 until PARSING_MODEL_SIZE) {
                     val label = parsed.labels[modelY * PARSING_MODEL_SIZE + modelX].toInt() and 0xFF
-                    // Common 19-class face parsing order: 6 = left brow, 7 = right brow.
-                    result[index] = label == 6 || label == 7
+                    // EasyPortrait ONNX brow channels. The legacy 6/7 assumption
+                    // selected eye/lip pixels in public-image visual diagnostics.
+                    result[index] = label == LEFT_BROW_CLASS || label == RIGHT_BROW_CLASS
                 }
                 index++
             }
