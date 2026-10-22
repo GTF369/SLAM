@@ -120,6 +120,15 @@ class BrowWorkflowInstrumentedTest {
         }
         assertTrue("Case manifests must not reference paths outside the case", unsafeReferenceRejected)
 
+        val reservedManifestReference = JSONObject(manifest.toString()).put("photo_file", "case.json.enc")
+        var reservedReferenceRejected = false
+        try {
+            PortableCaseBackup.pack(reservedManifestReference, mapOf("case.json.enc" to originalImage))
+        } catch (_: IllegalArgumentException) {
+            reservedReferenceRejected = true
+        }
+        assertTrue("Case resources must not collide with the encrypted manifest", reservedReferenceRejected)
+
         val hostileZipBuffer = ByteArrayOutputStream()
         ZipOutputStream(hostileZipBuffer).use { zip ->
             zip.putNextEntry(ZipEntry("manifest.json"))
