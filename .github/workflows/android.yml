@@ -70,10 +70,10 @@ jobs:
       - name: Build production-target ARM64 debug APK
         run: |
           set -euo pipefail
-          gradle --no-daemon assembleDebug
-          mkdir -p app/build/outputs/apk/oppo
-          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/oppo/app-debug.apk
-      - name: Launch an x86_64 smoke build on an Android emulator
+          gradle --no-daemon clean assembleDebug
+          mkdir -p /tmp/face-pattern-oppo
+          cp app/build/outputs/apk/debug/app-debug.apk /tmp/face-pattern-oppo/app-debug.apk
+      - name: Run case-library and mask-edit tests on an x86_64 Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -83,9 +83,8 @@ jobs:
           disable-animations: true
           script: |
             set -euo pipefail
-            gradle --no-daemon assembleDebug -PemulatorSmoke=true
+            gradle --no-daemon clean connectedDebugAndroidTest -PemulatorSmoke=true
             adb logcat -c
-            adb install -r app/build/outputs/apk/debug/app-debug.apk
             adb shell pm grant com.example.facepattern android.permission.CAMERA
             adb shell am start -W -n com.example.facepattern/.MainActivity
             sleep 8
@@ -99,7 +98,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: face-pattern-oppo-debug-apk
-          path: app/build/outputs/apk/oppo/app-debug.apk
+          path: /tmp/face-pattern-oppo/app-debug.apk
           if-no-files-found: error
           retention-days: 14
 
