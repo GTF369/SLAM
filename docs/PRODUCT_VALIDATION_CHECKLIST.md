@@ -35,7 +35,7 @@ Use this list to distinguish code completion, automated tests, device testing an
 
 - [ ] Test OPPO Find X7 camera permission, capture, repeated use, background/foreground, rotation, memory pressure and low-light warnings.
 - [ ] Complete camera capture → segmentation review → brush add/erase → brush-stroke undo/redo → parameter undo and transition pause/resume → save/compare → export → print flow on target Android versions.
-- [ ] Save a case, force-stop/relaunch the app, reopen it from the local case library, verify the original photo, current mask, and saved plans, then delete the case and verify its private files are removed.
+- [ ] Save a case with current photo, 400+ landmarks and mask, force-stop/relaunch the app, reopen it from the local case library, and verify the photo, exact saved landmark coordinates, current mask, parameters and saved plans are restored. For new manifests, reopening must not silently re-run landmark detection or move the design. Delete the case and verify its private files are removed.
 - [ ] Verify local case retention is disclosed to the customer and confirm that "Clear local records" clearly distinguishes preference/curvature data from saved case photos. Test storage-full and interrupted-write recovery.
 - [ ] Complete gallery/document-picker import with JPEG, PNG, rotated EXIF images, high-resolution photos, unsupported/corrupt images, face-not-found cases, and cancellation. Verify mirrored design coordinates are reversed correctly for the final template.
 - [ ] Test missing/corrupt models, landmark initialization errors, extreme image sizes, print cancellation and state restoration.
