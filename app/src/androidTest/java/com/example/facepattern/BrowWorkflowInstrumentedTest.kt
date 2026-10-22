@@ -19,6 +19,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.concurrent.TimeUnit
+import java.io.ByteArrayOutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+import org.json.JSONArray
+import org.json.JSONObject
+import java.security.GeneralSecurityException
 
 @RunWith(AndroidJUnit4::class)
 class BrowWorkflowInstrumentedTest {
@@ -65,6 +71,76 @@ class BrowWorkflowInstrumentedTest {
         assertNotNull(device.findObject(By.text("导入照片")))
         assertNotNull(device.findObject(By.text("本机案例库")))
         assertTrue(device.hasObject(By.text("仪器测试模式。相机未启动。")))
+    }
+
+    @Test
+    fun portableCaseBackupRoundTripsAndRejectsWrongPasswordOrTampering() {
+        val manifest = JSONObject()
+            .put("schema_version", 1)
+            .put("record_id", "source-case")
+            .put("display_name", "测试案例")
+            .put("anonymous_case_id", "TESTCASE01")
+            .put("saved_at", 1000L)
+            .put("photo_file", "photo_test.jpg.enc")
+            .put("current_segmentation", JSONObject.NULL)
+            .put("plans", JSONArray())
+        val originalImage = "synthetic-image-bytes-for-codec-test".toByteArray(Charsets.UTF_8)
+        val archiveBytes = PortableCaseBackup.pack(manifest, mapOf("photo_test.jpg.enc" to originalImage))
+        val password = "unique-test-passphrase-12".toCharArray()
+        val encrypted = PortableCaseBackup.encrypt(archiveBytes, password)
+        val decrypted = PortableCaseBackup.decrypt(encrypted, password)
+        val restored = PortableCaseBackup.unpack(decrypted)
+        assertEquals("测试案例", restored.manifest.getString("display_name"))
+        assertTrue(restored.files["photo_test.jpg.enc"]!!.contentEquals(originalImage))
+
+        var wrongPasswordRejected = false
+        try {
+            PortableCaseBackup.decrypt(encrypted, "different-wrong-password".toCharArray())
+        } catch (_: GeneralSecurityException) {
+            wrongPasswordRejected = true
+        }
+        assertTrue("Wrong backup passwords must not decrypt the package", wrongPasswordRejected)
+
+        val tampered = encrypted.copyOf()
+        tampered[tampered.lastIndex] = (tampered[tampered.lastIndex].toInt() xor 1).toByte()
+        var tamperingRejected = false
+        try {
+            PortableCaseBackup.decrypt(tampered, password)
+        } catch (_: GeneralSecurityException) {
+            tamperingRejected = true
+        }
+        assertTrue("Authenticated encryption must reject modified ciphertext", tamperingRejected)
+
+        val evilManifest = JSONObject(manifest.toString()).put("photo_file", "../outside.jpg.enc")
+        var unsafeReferenceRejected = false
+        try {
+            PortableCaseBackup.pack(evilManifest, mapOf("../outside.jpg.enc" to originalImage))
+        } catch (_: IllegalArgumentException) {
+            unsafeReferenceRejected = true
+        }
+        assertTrue("Case manifests must not reference paths outside the case", unsafeReferenceRejected)
+
+        val hostileZipBuffer = ByteArrayOutputStream()
+        ZipOutputStream(hostileZipBuffer).use { zip ->
+            zip.putNextEntry(ZipEntry("manifest.json"))
+            zip.write(manifest.toString().toByteArray(Charsets.UTF_8))
+            zip.closeEntry()
+            zip.putNextEntry(ZipEntry("data/../outside.jpg.enc"))
+            zip.write(originalImage)
+            zip.closeEntry()
+        }
+        var unsafeZipRejected = false
+        try {
+            PortableCaseBackup.unpack(hostileZipBuffer.toByteArray())
+        } catch (_: IllegalArgumentException) {
+            unsafeZipRejected = true
+        }
+        assertTrue("ZIP path traversal entries must be rejected", unsafeZipRejected)
+
+        password.fill('\u0000')
+        encrypted.fill(0)
+        decrypted.fill(0)
+        archiveBytes.fill(0)
     }
 
     @Test
