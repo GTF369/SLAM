@@ -2723,10 +2723,11 @@ class MainActivity : AppCompatActivity() {
             }
     }
 
+
     private fun createPortableCaseBackup(directory: File, password: CharArray) {
         status.text = "正在生成口令保护的案例备份…"
         Thread({
-            var archiveBytes: ByteArray? = null
+            var packedBytes: ByteArray? = null
             var encryptedBundle: ByteArray? = null
             val plainFiles = linkedMapOf<String, ByteArray>()
             var displayName = "眉形案例"
@@ -2742,14 +2743,15 @@ class MainActivity : AppCompatActivity() {
                     }
                     plainFiles[name] = decryptCaseBlob(source.readBytes())
                 }
-                archiveBytes = PortableCaseBackup.pack(manifest, plainFiles)
-                encryptedBundle = PortableCaseBackup.encrypt(archiveBytes, password)
+                val packed = PortableCaseBackup.pack(manifest, plainFiles)
+                packedBytes = packed
+                encryptedBundle = PortableCaseBackup.encrypt(packed, password)
             } catch (e: Exception) {
                 failure = e.message ?: "案例加密失败"
             } finally {
                 password.fill('\u0000')
                 plainFiles.values.forEach { it.fill(0) }
-                archiveBytes?.fill(0)
+                packedBytes?.fill(0)
             }
             val payload = encryptedBundle
             runOnUiThread {
@@ -2759,7 +2761,7 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, "案例备份失败：" + (failure ?: "加密结果为空"), Toast.LENGTH_LONG).show()
                     return@runOnUiThread
                 }
-                if (pendingPortableCaseExport != null) pendingPortableCaseExport?.fill(0)
+                pendingPortableCaseExport?.fill(0)
                 pendingPortableCaseExport = payload
                 val safeName = displayName
                     .map { if (it.isLetterOrDigit() || it == '_' || it == '-') it else '_' }
@@ -2865,6 +2867,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+
     private fun importPortableCaseBackup(uri: Uri, password: CharArray) {
         status.text = "正在验证并导入加密案例…"
         Thread({
@@ -2875,18 +2878,23 @@ class MainActivity : AppCompatActivity() {
             var failure: String? = null
             var importedName = "眉形案例"
             try {
-                bundle = readBoundedInput(uri, PortableCaseBackup.MAX_ENCRYPTED_BUNDLE_BYTES)
-                archiveBytes = PortableCaseBackup.decrypt(bundle, password)
-                archive = PortableCaseBackup.unpack(archiveBytes)
-                validatePortableCaseImages(archive)
-                val sourceManifest = archive.manifest
+                val inputBundle = readBoundedInput(uri, PortableCaseBackup.MAX_ENCRYPTED_BUNDLE_BYTES)
+                bundle = inputBundle
+                val decryptedArchive = PortableCaseBackup.decrypt(inputBundle, password)
+                archiveBytes = decryptedArchive
+                val parsedArchive = PortableCaseBackup.unpack(decryptedArchive)
+                archive = parsedArchive
+                validatePortableCaseImages(parsedArchive)
+
+                val sourceManifest = parsedArchive.manifest
                 importedName = sourceManifest.optString("display_name", "眉形案例").take(100).ifBlank { "眉形案例" }
                 val newRecordId = UUID.randomUUID().toString()
-                targetDirectory = File(caseLibraryRoot(), newRecordId)
-                check(targetDirectory!!.mkdirs()) { "无法创建导入案例目录" }
+                val target = File(caseLibraryRoot(), newRecordId)
+                targetDirectory = target
+                check(target.mkdirs()) { "无法创建导入案例目录" }
 
-                archive.files.forEach { (name, plaintext) ->
-                    val destination = File(targetDirectory, name)
+                parsedArchive.files.forEach { (name, plaintext) ->
+                    val destination = File(target, name)
                     val encryptedFile = encryptCaseBlob(plaintext)
                     try {
                         FileOutputStream(destination).use { output ->
@@ -2910,7 +2918,7 @@ class MainActivity : AppCompatActivity() {
                 val manifestBytes = manifest.toString().toByteArray(Charsets.UTF_8)
                 val encryptedManifest = encryptCaseBlob(manifestBytes)
                 try {
-                    FileOutputStream(File(targetDirectory, "case.json.enc")).use { output ->
+                    FileOutputStream(File(target, "case.json.enc")).use { output ->
                         output.write(encryptedManifest)
                         output.fd.sync()
                     }
@@ -2919,13 +2927,26 @@ class MainActivity : AppCompatActivity() {
                     encryptedManifest.fill(0)
                 }
 
-                val reread = readCaseManifest(targetDirectory!!) ?: throw IllegalStateException("导入案例索引无法重新读取")
+                val reread = readCaseManifest(target) ?: throw IllegalStateException("导入案例索引无法重新读取")
                 require(reread.optString("record_id") == newRecordId) { "导入案例编号校验失败" }
-                val photoName = reread.optString("photo_file", "")
-                val restoredPhoto = decodeCaseBitmap(targetDirectory!!, photoName)
+                val restoredPhoto = decodeCaseBitmap(target, reread.optString("photo_file", ""))
                     ?: throw IllegalStateException("导入案例照片无法恢复")
                 restoredPhoto.recycle()
-                targetDirectory!!.listFiles()?.filter { it.name.endsWith(".tmp") }?.forEach { it.delete() }
+
+                val currentMaskValue = reread.opt("current_segmentation")
+                if (currentMaskValue is org.json.JSONObject &&
+                    readMaskSnapshot(target, currentMaskValue) == null) {
+                    throw IllegalStateException("导入案例当前眉区轮廓无法恢复")
+                }
+                val savedPlans = reread.optJSONArray("plans") ?: org.json.JSONArray()
+                for (index in 0 until savedPlans.length()) {
+                    val plan = savedPlans.optJSONObject(index) ?: continue
+                    val maskValue = plan.opt("mask")
+                    if (maskValue is org.json.JSONObject && readMaskSnapshot(target, maskValue) == null) {
+                        throw IllegalStateException("导入案例第 ${index + 1} 套方案轮廓无法恢复")
+                    }
+                }
+                target.listFiles()?.filter { it.name.endsWith(".tmp") }?.forEach { it.delete() }
             } catch (e: Exception) {
                 failure = when (e) {
                     is javax.crypto.AEADBadTagException -> "口令错误，或备份数据已被篡改"
