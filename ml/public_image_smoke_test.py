@@ -91,7 +91,7 @@ def map_labels_to_roi(labels: np.ndarray, crop_left: int, crop_top: int, side: i
         in_range = (model_x >= 0) & (model_x < PARSING_SIZE)
         row_labels = np.zeros(roi_w, dtype=np.uint8)
         row_labels[in_range] = labels[model_y, model_x[in_range]]
-        mask[y, :] = (row_labels == 6) | (row_labels == 7)
+        mask[y, :] = (row_labels == 2) | (row_labels == 3)
     return mask
 
 
@@ -169,7 +169,7 @@ def run_case(image_path: Path, case_name: str, landmarker, session, out_dir: Pat
         if len(class_x):
             class_bboxes[str(class_id)] = [int(class_x.min()), int(class_y.min()), int(class_x.max()) + 1, int(class_y.max()) + 1]
     report["parser_class_bboxes_model_xyxy"] = class_bboxes
-    report["class_6_7_pixels_percent_of_face_crop"] = round(float(np.mean((labels == 6) | (labels == 7)) * 100), 3)
+    report["class_2_3_pixels_percent_of_face_crop"] = round(float(np.mean((labels == 2) | (labels == 3)) * 100), 3)
     if case_name == "virtual_makeup_demo":
         # Diagnostic contact sheet to verify the model label map visually.
         from PIL import ImageDraw
@@ -192,18 +192,18 @@ def run_case(image_path: Path, case_name: str, landmarker, session, out_dir: Pat
         for idx, tile in enumerate(tiles):
             sheet.paste(tile, ((idx % 3) * 250, (idx // 3) * 244))
         sheet.save(out_dir / "model_class_2_to_8_contact_sheet.jpg", quality=92)
-    local_brow_labels = (labels == 6) | (labels == 7)
+    local_brow_labels = (labels == 2) | (labels == 3)
     ys, xs = np.where(local_brow_labels)
     if len(xs):
-        report["class_6_7_bbox_model_xyxy"] = [int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1]
+        report["class_2_3_bbox_model_xyxy"] = [int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1]
         source_x0 = max(0, crop_left + int(xs.min() * side / PARSING_SIZE))
         source_y0 = max(0, crop_top + int(ys.min() * side / PARSING_SIZE))
         source_x1 = min(w, crop_left + int((xs.max() + 1) * side / PARSING_SIZE) + 1)
         source_y1 = min(h, crop_top + int((ys.max() + 1) * side / PARSING_SIZE) + 1)
-        report["class_6_7_bbox_source_xyxy_approx"] = [source_x0, source_y0, source_x1, source_y1]
+        report["class_2_3_bbox_source_xyxy_approx"] = [source_x0, source_y0, source_x1, source_y1]
     else:
-        report["class_6_7_bbox_model_xyxy"] = None
-        report["class_6_7_bbox_source_xyxy_approx"] = None
+        report["class_2_3_bbox_model_xyxy"] = None
+        report["class_2_3_bbox_source_xyxy_approx"] = None
     report["roi_results"] = []
     final_mask = np.zeros((h, w), dtype=bool)
 
@@ -222,10 +222,16 @@ def run_case(image_path: Path, case_name: str, landmarker, session, out_dir: Pat
             "model_brow_pixels": model_count,
             "model_brow_fraction": round(float(model_count / max(1, model_mask.size)), 4),
             "model_mask_accepted_by_app_gate": bool(used_model),
-            "selected_method": "EasyPortrait class 6/7" if used_model else "adaptive contrast fallback",
+            "selected_method": "EasyPortrait class 2/3" if used_model else "adaptive contrast fallback",
             "final_mask_pixels": int(chosen.sum()),
             "final_mask_fraction": round(float(chosen.mean()), 4),
         })
+
+    model_accepted_regions = sum(
+        item["model_mask_accepted_by_app_gate"] for item in report["roi_results"]
+    )
+    report["model_mask_accepted_regions"] = int(model_accepted_regions)
+    report["model_brow_rois_pass"] = bool(model_accepted_regions == 2)
 
     overlay = image.copy()
     green = np.zeros_like(overlay)
@@ -257,7 +263,7 @@ def run_case(image_path: Path, case_name: str, landmarker, session, out_dir: Pat
         model_overlay[model_only].astype(np.float32) * 0.42
         + orange[model_only].astype(np.float32) * 0.58
     ).clip(0, 255).astype(np.uint8)
-    model_path = out_dir / f"{case_name}_model_classes_6_7.jpg"
+    model_path = out_dir / f"{case_name}_model_classes_2_3.jpg"
     Image.fromarray(model_overlay).save(model_path, quality=90)
     report["preview_file"] = output_path.name
     report["model_only_preview_file"] = model_path.name
@@ -312,6 +318,15 @@ def main():
         "cases": reports,
         "passed": sum(item.get("status") == "PASS_SMOKE_ONLY" for item in reports),
         "failed": sum(item.get("status") == "FAIL" for item in reports),
+        "base_demo_brow_mapping_pass": next(
+            (bool(item.get("model_brow_rois_pass")) for item in reports
+             if item.get("case") == "virtual_makeup_demo"), False
+        ),
+        "brow_mapping_failures_on_demo_and_mirror": sum(
+            1 for item in reports
+            if item.get("case") in {"virtual_makeup_demo", "demo_mirrored"}
+            and not item.get("model_brow_rois_pass", False)
+        ),
         "limitations": [
             "This does not install or launch the ARM64 Android APK.",
             "Public photos have no expert eyebrow-mask ground truth, so mask accuracy is not established.",
@@ -321,7 +336,12 @@ def main():
     }
     (args.output_dir / "smoke_report.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))
-    if not reports or summary["failed"]:
+    if (
+        not reports
+        or summary["failed"]
+        or not summary["base_demo_brow_mapping_pass"]
+        or summary["brow_mapping_failures_on_demo_and_mirror"] > 0
+    ):
         raise SystemExit(1)
 
 
