@@ -63,6 +63,36 @@ class BrowWorkflowInstrumentedTest {
     }
 
     @Test
+    fun transferErrorRecordCanBeSavedAndExported() {
+        launch(syntheticDesign = true)
+        assertTrue(
+            "Synthetic test design did not load",
+            device.wait(Until.hasObject(By.textContains("合成测试照片已加载")), TimeUnit.SECONDS.toMillis(5))
+        )
+
+        scrollTo("转印误差记录")
+        clickText("转印误差记录")
+        assertTrue(
+            "Transfer validation dialog did not open",
+            device.wait(Until.hasObject(By.text("打印与转印误差记录")), TimeUnit.SECONDS.toMillis(3))
+        )
+        val fields = device.findObjects(By.clazz("android.widget.EditText"))
+        assertTrue("Expected profile, skin arc, stencil length and endpoint error fields", fields.size >= 4)
+        fields[0].text = "CI_Printer_A4_100pct"
+        fields[1].text = "10.0"
+        fields[2].text = "10.5"
+        fields[3].text = "1.2"
+        clickText("保存验证记录")
+
+        scrollTo("导出转印验证 CSV")
+        clickText("导出转印验证 CSV")
+        assertTrue(
+            "Transfer-validation CSV export did not complete",
+            device.wait(Until.hasObject(By.textContains("已导出转印验证 CSV")), TimeUnit.SECONDS.toMillis(5))
+        )
+    }
+
+    @Test
     fun savedPlanAndEncryptedCaseCanBeReopened() {
         launch(syntheticDesign = true)
         assertTrue(
