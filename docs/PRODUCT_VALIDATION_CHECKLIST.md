@@ -7,7 +7,7 @@ Use this list to distinguish code completion, automated tests, device testing an
 - [ ] Collect customer feedback only with specific, recorded authorization and stable anonymous customer IDs.
 - [ ] Provide a clear annotation guide for ratings and the final selected design. A selected candidate and a 4–5 rating must remain distinct labels.
 - [ ] Keep development, calibration and external validation customers disjoint.
-- [ ] Compare against a fixed geometry-rule baseline and report case-level Top 1/Top 3 preference, ROC AUC, Brier score, calibration error and uncertainty.
+- [ ] Compare against a fixed geometry-rule baseline and report case-level Top 1/Top 3 preference, ROC AUC, Brier score, calibration error and uncertainty. For brow-segmentation model promotion, require both pooled-pixel Dice and equal-weighted customer-macro Dice to pass the configured threshold.
 - [ ] Check relevant subgroups and capture conditions, including lighting, makeup, brow density, asymmetry and different face proportions.
 - [ ] Never call geometry-rule reference scores probabilities. The app only displays percentage preference estimates for a version-3 model that has separate calibration, passing external metrics and an explicit human-review approval flag.
 - [ ] The current script's 30 development / 50 calibration / 100 external-customer minimums and metric thresholds are engineering screens, not statistical guarantees. Determine final sample size from the intended claims and expected error bounds.
