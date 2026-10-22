@@ -450,6 +450,10 @@ class MainActivity : AppCompatActivity() {
         ))
         addButtonRow(designControls, listOf(
             "曲率标定" to { showCurvatureCalibration() },
+            "转印误差记录" to { showTransferValidationDialog() }
+        ))
+        addButtonRow(designControls, listOf(
+            "导出转印验证 CSV" to { exportTransferValidationCsv() },
             "重新拍摄" to { retakePhoto() }
         ))
         val note = TextView(this).apply {
@@ -2789,6 +2793,169 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun showTransferValidationDialog() {
+        val prefs = getSharedPreferences("brow_print_calibration", Context.MODE_PRIVATE)
+        val profile = EditText(this).apply {
+            setSingleLine(true)
+            hint = "打印机、纸张、驱动配置名称"
+            setText(prefs.getString("last_profile", "默认打印配置"))
+        }
+        val region = android.widget.Spinner(this).apply {
+            adapter = android.widget.ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                curvatureRegionNames
+            )
+        }
+        val curvatureMode = android.widget.Spinner(this).apply {
+            adapter = android.widget.ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                listOf("无曲率修正", "顾客实测区域长度修正")
+            )
+        }
+        val skinArc = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            hint = "同一端点间的皮肤表面弧长（毫米）"
+        }
+        val printedPath = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            hint = "已打印模板中同一段路径长度（毫米）"
+        }
+        val endpointError = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            hint = "实际转印后最大端点偏差（毫米，可留空）"
+        }
+        val note = TextView(this).apply {
+            text = "用于验证真实纸面和皮肤转印误差，不会自动更改打印系数。必须对同一眉区、同一对端点测量。模板长度沿打印轮廓量取，皮肤弧长沿皮肤表面量取。端点偏差填写转印后眉头/眉尾对应定位点的最大偏离距离。请先取得顾客对这些匿名测量数据的使用授权。"
+            textSize = 12f
+            setPadding(dp(16), dp(4), dp(16), dp(8))
+        }
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(8), dp(18), 0)
+            addView(note)
+            addView(TextView(this@MainActivity).apply { text = "匿名案例编号：$currentCaseId"; textSize = 12f })
+            addView(profile)
+            addView(region)
+            addView(curvatureMode)
+            addView(skinArc)
+            addView(printedPath)
+            addView(endpointError)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("打印与转印误差记录")
+            .setView(form)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("保存验证记录") { _, _ ->
+                val profileName = profile.text.toString().trim().take(80)
+                val skinLength = skinArc.text.toString().toFloatOrNull()
+                val templateLength = printedPath.text.toString().toFloatOrNull()
+                val endpointText = endpointError.text.toString().trim()
+                val endpointValue = if (endpointText.isBlank()) null else endpointText.toFloatOrNull()
+                if (profileName.length < 3) {
+                    Toast.makeText(this, "请填写有效的打印配置名称", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                if (skinLength == null || templateLength == null ||
+                    !skinLength.isFinite() || !templateLength.isFinite() ||
+                    skinLength !in 5f..100f || templateLength !in 5f..100f) {
+                    Toast.makeText(this, "皮肤弧长和模板路径长度必须为 5–100 毫米之间的实测值", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                if (endpointText.isNotBlank() &&
+                    (endpointValue == null || !endpointValue.isFinite() || endpointValue !in 0f..50f)) {
+                    Toast.makeText(this, "端点偏差应为 0–50 毫米，未测量可留空", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                val activePrintScale = printScaleForProfile(profileName)
+                val signedError = templateLength - skinLength
+                val record = org.json.JSONObject().apply {
+                    put("record_id", UUID.randomUUID().toString())
+                    put("case_id", currentCaseId)
+                    put("printer_profile", profileName)
+                    put("region", region.selectedItem.toString())
+                    put("curvature_method", curvatureMode.selectedItem.toString())
+                    put("skin_arc_mm", skinLength.toDouble())
+                    put("printed_template_path_mm", templateLength.toDouble())
+                    put("signed_length_error_mm", signedError.toDouble())
+                    put("absolute_length_error_mm", abs(signedError).toDouble())
+                    put("length_error_percent", (signedError / skinLength * 100f).toDouble())
+                    put("endpoint_alignment_error_mm", endpointValue?.toDouble() ?: org.json.JSONObject.NULL)
+                    put("print_scale_correction", activePrintScale.toDouble())
+                    put("timestamp", System.currentTimeMillis())
+                }
+                val store = getSharedPreferences("brow_transfer_validation", Context.MODE_PRIVATE)
+                val records = org.json.JSONArray(store.getString("records", "[]"))
+                records.put(record)
+                store.edit().putString("records", records.toString()).apply()
+                Toast.makeText(
+                    this,
+                    "已保存匿名转印验证记录。该记录仅用于分析，不会自动调整任何打印参数。",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            .show()
+    }
+
+    private fun csvCell(value: String): String {
+        val safe = if (value.firstOrNull() in listOf('=', '+', '-', '@')) "'$value" else value
+        return "\"${safe.replace("\"", "\"\"")}\""
+    }
+
+    private fun exportTransferValidationCsv() {
+        val records = org.json.JSONArray(
+            getSharedPreferences("brow_transfer_validation", Context.MODE_PRIVATE).getString("records", "[]")
+        )
+        if (records.length() == 0) {
+            Toast.makeText(this, "暂无转印验证记录", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val csv = buildString {
+            append("case_id,printer_profile,region,curvature_method,skin_arc_mm,printed_template_path_mm,signed_length_error_mm,absolute_length_error_mm,length_error_percent,endpoint_alignment_error_mm,print_scale_correction,timestamp\n")
+            for (i in 0 until records.length()) {
+                val row = records.optJSONObject(i) ?: continue
+                val endpoint = row.opt("endpoint_alignment_error_mm")
+                append(csvCell(row.optString("case_id"))).append(',')
+                append(csvCell(row.optString("printer_profile"))).append(',')
+                append(csvCell(row.optString("region"))).append(',')
+                append(csvCell(row.optString("curvature_method"))).append(',')
+                append(row.optDouble("skin_arc_mm")).append(',')
+                append(row.optDouble("printed_template_path_mm")).append(',')
+                append(row.optDouble("signed_length_error_mm")).append(',')
+                append(row.optDouble("absolute_length_error_mm")).append(',')
+                append(row.optDouble("length_error_percent")).append(',')
+                append(if (endpoint == null || endpoint == org.json.JSONObject.NULL) "" else row.optDouble("endpoint_alignment_error_mm").toString()).append(',')
+                append(row.optDouble("print_scale_correction")).append(',')
+                append(row.optLong("timestamp")).append('\n')
+            }
+        }
+        val filename = "brow_transfer_validation_${System.currentTimeMillis()}.csv"
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, filename)
+                    put(MediaStore.Downloads.MIME_TYPE, "text/csv")
+                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/BrowDesign")
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: throw IllegalStateException("无法创建 CSV 文件")
+                contentResolver.openOutputStream(uri)?.use { it.write(csv.toByteArray(Charsets.UTF_8)) }
+                    ?: throw IllegalStateException("无法写入 CSV")
+                val publish = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+                contentResolver.update(uri, publish, null, null)
+            } else {
+                val directory = File(getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "BrowDesign")
+                if (!directory.exists()) directory.mkdirs()
+                File(directory, filename).writeText(csv, Charsets.UTF_8)
+            }
+            Toast.makeText(this, "已导出转印验证 CSV 到 Downloads/BrowDesign", Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "导出失败：" + (e.message ?: "请重试"), Toast.LENGTH_LONG).show()
+        }
+    }
+
     private fun clearLocalRecords() {
         AlertDialog.Builder(this)
             .setTitle("清除应用内记录")
@@ -2797,6 +2964,7 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("清除") { _, _ ->
                 getSharedPreferences("brow_preference_feedback", Context.MODE_PRIVATE).edit().clear().apply()
                 getSharedPreferences("brow_curvature_samples", Context.MODE_PRIVATE).edit().clear().apply()
+                getSharedPreferences("brow_transfer_validation", Context.MODE_PRIVATE).edit().clear().apply()
                 savedPlans.forEach { it.segmentationSnapshot?.overlay?.recycle() }
                 savedPlans.clear()
                 refreshPlanButtons()
@@ -2878,6 +3046,29 @@ class MainActivity : AppCompatActivity() {
         return factors
     }
 
+    private fun printProfileSlug(raw: String): String = raw.trim().lowercase()
+        .map { if (it.isLetterOrDigit()) it else '_' }
+        .joinToString("")
+        .replace(Regex("_+"), "_")
+        .trim('_')
+        .take(48)
+        .ifBlank { "default" }
+
+    private fun printProfilePreferenceKey(raw: String): String =
+        "scale_correction_profile_${printProfileSlug(raw)}"
+
+    private fun printScaleForProfile(raw: String): Float {
+        val prefs = getSharedPreferences("brow_print_calibration", Context.MODE_PRIVATE)
+        val key = printProfilePreferenceKey(raw)
+        if (prefs.contains(key)) return prefs.getFloat(key, 1f)
+        // Migrate the former global coefficient only into the default profile.
+        return if (printProfileSlug(raw) == printProfileSlug("默认打印配置")) {
+            prefs.getFloat("scale_correction", 1f)
+        } else {
+            1f
+        }
+    }
+
     private fun askPrintCalibration() {
         val points = browView.facePoints()
         if (points.size < 478 || capturedPhoto == null) {
@@ -2901,26 +3092,7 @@ class MainActivity : AppCompatActivity() {
             setSingleLine(true)
             setText(printScalePrefs.getString("last_profile", "默认打印配置"))
         }
-        fun profileSlug(raw: String): String = raw.trim().lowercase()
-            .map { if (it.isLetterOrDigit()) it else '_' }
-            .joinToString("")
-            .replace(Regex("_+"), "_")
-            .trim('_')
-            .take(48)
-            .ifBlank { "default" }
-        fun profilePreferenceKey(raw: String): String =
-            "scale_correction_profile_${profileSlug(raw)}"
-        fun scaleForProfile(raw: String): Float {
-            val key = profilePreferenceKey(raw)
-            if (printScalePrefs.contains(key)) return printScalePrefs.getFloat(key, 1f)
-            // Migrate the former single global coefficient only into the default profile.
-            return if (profileSlug(raw) == profileSlug("默认打印配置")) {
-                printScalePrefs.getFloat("scale_correction", 1f)
-            } else {
-                1f
-            }
-        }
-        val savedPrintScaleCorrection = scaleForProfile(profileInput.text.toString())
+        val savedPrintScaleCorrection = printScaleForProfile(profileInput.text.toString())
         val printScaleInput = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             hint = "上一张打印稿中 20 mm 方框的实测边长，未测量留空"
@@ -2935,7 +3107,7 @@ class MainActivity : AppCompatActivity() {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 val name = s?.toString().orEmpty().trim().ifBlank { "未命名配置" }
-                val scale = scaleForProfile(name)
+                val scale = printScaleForProfile(name)
                 printScaleState.text = "配置：$name。当前比例修正系数：x${(scale * 1000f).roundToInt() / 1000f}。仅适用于同一打印机、纸张和设置。"
             }
             override fun afterTextChanged(s: Editable?) = Unit
@@ -3014,7 +3186,7 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, "请为打印机、纸张和驱动设置填写一个易识别的配置名称", Toast.LENGTH_LONG).show()
                     return@setPositiveButton
                 }
-                val printProfileKey = profilePreferenceKey(printProfileName)
+                val printProfileKey = printProfilePreferenceKey(printProfileName)
                 val correctionBase = if (resetPrintScale.isChecked) 1f else scaleForProfile(printProfileName)
                 val printScaleCorrection = measuredSquareMm?.let { correctionBase * 20f / it } ?: correctionBase
                 if (printScaleCorrection !in 0.80f..1.25f) {
