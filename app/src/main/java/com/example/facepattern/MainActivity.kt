@@ -2934,16 +2934,19 @@ class MainActivity : AppCompatActivity() {
                 restoredPhoto.recycle()
 
                 val currentMaskValue = reread.opt("current_segmentation")
-                if (currentMaskValue is org.json.JSONObject &&
-                    readMaskSnapshot(target, currentMaskValue) == null) {
-                    throw IllegalStateException("导入案例当前眉区轮廓无法恢复")
+                if (currentMaskValue is org.json.JSONObject) {
+                    val restoredMask = readMaskSnapshot(target, currentMaskValue)
+                        ?: throw IllegalStateException("导入案例当前眉区轮廓无法恢复")
+                    if (!restoredMask.overlay.isRecycled) restoredMask.overlay.recycle()
                 }
                 val savedPlans = reread.optJSONArray("plans") ?: org.json.JSONArray()
                 for (index in 0 until savedPlans.length()) {
                     val plan = savedPlans.optJSONObject(index) ?: continue
                     val maskValue = plan.opt("mask")
-                    if (maskValue is org.json.JSONObject && readMaskSnapshot(target, maskValue) == null) {
-                        throw IllegalStateException("导入案例第 ${index + 1} 套方案轮廓无法恢复")
+                    if (maskValue is org.json.JSONObject) {
+                        val restoredMask = readMaskSnapshot(target, maskValue)
+                            ?: throw IllegalStateException("导入案例第 ${index + 1} 套方案轮廓无法恢复")
+                        if (!restoredMask.overlay.isRecycled) restoredMask.overlay.recycle()
                     }
                 }
                 target.listFiles()?.filter { it.name.endsWith(".tmp") }?.forEach { it.delete() }
