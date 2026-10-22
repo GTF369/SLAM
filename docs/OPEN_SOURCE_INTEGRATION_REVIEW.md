@@ -8,14 +8,14 @@
 
 现有方案已经采用 MediaPipe Face Landmarker、EasyPortrait 导出的 ONNX 人脸解析模型、可人工编辑的眉区掩膜、参数化眉形、按匿名顾客分组的偏好模型训练流程、区域弧长/弦长实测以及 Android Print Framework。最值得补强的是验证质量，而不是替换整套技术栈。
 
-本次分支进一步将打印比例校准按设备/纸张/驱动的用户命名配置隔离，防止不同打印设置误用同一个全局比例系数；并为眉区分割模型增加按 ROI 和按顾客汇总的评估指标。它不会自动产生真实顾客数据，也不会替代目标打印机的实测。
+本次分支进一步将打印比例校准按设备/纸张/驱动的用户命名配置隔离，防止不同打印设置误用同一个全局比例系数；并为眉区分割模型增加按 ROI 和按顾客汇总的评估指标。它不会自动产生真实顾客数据，也不会替代目标打印机的实测。此外，公开人像的逐通道可视化发现原先套用的第 6、7 类映射不正确，并已在 Android 引擎和 smoke-test 中改为第 2、3 类。这个修复解决了已观察到的类别索引错误，但并不证明它在真实纹绣顾客中的轮廓准确率。
 
 ## 开源项目审查
 
 | 项目 | 可以借鉴的内容 | 不应直接假定的能力 | 集成决策 |
 |---|---|---|---|
 | [MediaPipe](https://github.com/google-ai-edge/mediapipe) | Android 端人脸关键点与视觉任务，已有依赖与照片坐标流程可复用 | 关键点和相对 z 不是皮肤表面的毫米级 3D 扫描 | 继续使用现有模块，重点补真机与照片质量验证 |
-| [EasyPortrait](https://github.com/hukenovs/easyportrait) / [EasyPortrait ONNX 模型](https://huggingface.co/sadzip/EasyPortrait-ONNX) | 通用人脸解析的眉区预分割，能减少纯阈值分割的依赖 | 通用面部分割的眉毛标签可能受模型转换、化妆、阴影、浅色眉毛影响 | 保留作初始掩膜，继续人工审核，并以真实纹绣照片确认类别映射 |
+| [EasyPortrait](https://github.com/hukenovs/easyportrait) / [EasyPortrait ONNX 模型](https://huggingface.co/sadzip/EasyPortrait-ONNX) | 通用人脸解析的眉区预分割，能减少纯阈值分割的依赖 | 类别索引必须匹配实际下载的模型资产，化妆、阴影和浅色眉毛也可能导致错分 | 已用公开图像逐通道检查并把应用映射从 6/7 修正为 2/3；仍需真实纹绣标注集验证 |
 | [BiSeNet 面部分割示例](https://github.com/waleed-Amjad/Face-parsing-segmentation) | PyTorch/ONNX 推理、类别掩膜与可视化评估的参考 | 仓库里出现模型权重不代表该权重已对本应用的客户分布验证，也不自动代表可商用 | 参考评估与排障方式，不盲目替换当前模型 |
 | [Virtual_Makeup](https://github.com/Jayanths9/Virtual_Makeup) | MediaPipe 关键点、多边形区域与 OpenCV 图像叠加；可作为渲染回归案例 | 这是 Python 桌面应用，目标是颜色妆效，不负责个性化眉形推荐、物理打印或 3D 转印 | 作为视觉叠加参考，不作为 Android 运行时依赖；复制代码前先单独审查许可 |
 | [virtual-makeup (React)](https://github.com/otdnnc/virtual-makeup) | 客户端人脸关键点、分割、可调预设与本地处理的 UI 设计参考；仓库标注 MIT | Web 技术栈不能直接提供 Android 原生相机、打印校准或眉弓物理测量 | 只参考隐私优先与预设交互，不迁移整套前端 |
