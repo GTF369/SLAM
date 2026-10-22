@@ -2309,7 +2309,7 @@ class MainActivity : AppCompatActivity() {
             setText(activeStoredCaseName.ifBlank { "眉形案例 " + currentCaseId })
         }
         val note = TextView(this).apply {
-            text = "案例会保存在应用私有目录，包含照片、当前识别轮廓及已保存方案，只有此应用可直接读取。照片不会由本应用上传，但未单独加密。请先获得顾客对本地留存的授权。卸载应用或清除应用数据会删除案例。"
+            text = "案例照片、识别轮廓和关键点索引会在应用私有目录中使用 Android Keystore AES-GCM 加密保存，不会上传。请先取得顾客对本机留存的授权。加密密钥绑定本设备，单独复制文件夹无法迁移。卸载应用或清除应用数据会删除案例及密钥。"
             textSize = 12f
             setPadding(dp(18), dp(4), dp(18), dp(8))
         }
