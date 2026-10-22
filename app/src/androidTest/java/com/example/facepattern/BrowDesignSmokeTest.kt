@@ -195,6 +195,22 @@ class BrowDesignSmokeTest {
                 "The saved case was not listed",
                 device.wait(Until.hasObject(By.textContains("眉形案例 QA_CASE_2026")), 5_000)
             )
+            device.findObject(By.text("打开")).click()
+            assertTrue(
+                "The saved case did not restore the design state",
+                device.wait(Until.hasObject(By.textContains("已恢复本机案例")), 10_000)
+            )
+            scenario.onActivity { activity ->
+                val captured = MainActivity::class.java.getDeclaredField("capturedPhoto").apply {
+                    isAccessible = true
+                }.get(activity) as? Bitmap
+                assertNotNull("Restored photo is missing in memory", captured)
+                val restoredMask = MainActivity::class.java.getDeclaredField("segmentationResult").apply {
+                    isAccessible = true
+                }.get(activity) as? BrowSegmentationResult
+                assertNotNull("Restored segmentation mask is missing in memory", restoredMask)
+                assertTrue("Restored mask bitmap is empty", (restoredMask?.overlay?.width ?: 0) > 0)
+            }
             device.pressBack()
         } finally {
             scenario.close()
