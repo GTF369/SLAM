@@ -24,6 +24,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.os.CancellationSignal
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
 import android.os.ParcelFileDescriptor
 import android.print.PageRange
 import android.print.PrintAttributes
@@ -69,8 +71,14 @@ import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
@@ -1993,14 +2001,82 @@ class MainActivity : AppCompatActivity() {
         return value.copy(overlay = bitmap, regions = value.regions.map { it.copyOf() })
     }
 
-    private fun writeBitmapVersioned(bitmap: Bitmap, destination: File, format: Bitmap.CompressFormat, quality: Int): Boolean {
+    private val caseEncryptionAlias = "brow_case_file_key_v1"
+    private val caseEncryptionMagic = "BROWCASE1".toByteArray(Charsets.US_ASCII)
+
+    private fun caseEncryptionKey(): SecretKey {
+        val keyStore = KeyStore.getInstance("AndroidKeyStore")
+        keyStore.load(null)
+        val existing = keyStore.getKey(caseEncryptionAlias, null) as? SecretKey
+        if (existing != null) return existing
+
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        generator.init(
+            KeyGenParameterSpec.Builder(
+                caseEncryptionAlias,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .setRandomizedEncryptionRequired(true)
+                .build()
+        )
+        return generator.generateKey()
+    }
+
+    private fun encryptCaseBlob(plaintext: ByteArray): ByteArray {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, caseEncryptionKey())
+        val iv = cipher.iv ?: throw IllegalStateException("Android Keystore 未生成加密随机数")
+        val ciphertext = cipher.doFinal(plaintext)
+        return ByteArrayOutputStream(caseEncryptionMagic.size + 1 + iv.size + ciphertext.size).use { output ->
+            output.write(caseEncryptionMagic)
+            output.write(iv.size)
+            output.write(iv)
+            output.write(ciphertext)
+            output.toByteArray()
+        }
+    }
+
+    private fun decryptCaseBlob(payload: ByteArray): ByteArray {
+        if (payload.size < caseEncryptionMagic.size + 1 + 12 + 16) {
+            throw IllegalArgumentException("加密病例文件长度无效")
+        }
+        for (i in caseEncryptionMagic.indices) {
+            if (payload[i] != caseEncryptionMagic[i]) throw IllegalArgumentException("病例文件不是受支持的加密格式")
+        }
+        val ivLength = payload[caseEncryptionMagic.size].toInt() and 0xff
+        val ivStart = caseEncryptionMagic.size + 1
+        val ciphertextStart = ivStart + ivLength
+        if (ivLength !in 12..16 || ciphertextStart >= payload.size) {
+            throw IllegalArgumentException("加密病例文件头损坏")
+        }
+        val iv = payload.copyOfRange(ivStart, ciphertextStart)
+        val ciphertext = payload.copyOfRange(ciphertextStart, payload.size)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, caseEncryptionKey(), GCMParameterSpec(128, iv))
+        return cipher.doFinal(ciphertext)
+    }
+
+    private fun writeEncryptedBitmapVersioned(
+        bitmap: Bitmap,
+        destination: File,
+        format: Bitmap.CompressFormat,
+        quality: Int
+    ): Boolean {
         val temporary = File(destination.parentFile, destination.name + ".tmp")
         return try {
+            val plainImage = ByteArrayOutputStream().use { output ->
+                if (!bitmap.compress(format, quality, output)) throw IllegalStateException("图片编码失败")
+                output.toByteArray()
+            }
+            val encryptedImage = encryptCaseBlob(plainImage)
             FileOutputStream(temporary).use { stream ->
-                if (!bitmap.compress(format, quality, stream)) throw IllegalStateException("图片编码失败")
+                stream.write(encryptedImage)
                 stream.fd.sync()
             }
-            if (destination.exists() && !destination.delete()) throw IllegalStateException("无法更新图片文件")
+            if (destination.exists() && !destination.delete()) throw IllegalStateException("无法更新加密图片文件")
             if (!temporary.renameTo(destination)) {
                 temporary.copyTo(destination, overwrite = true)
                 temporary.delete()
@@ -2012,6 +2088,23 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun decodeCaseBitmap(directory: File, fileName: String): Bitmap? {
+        if (fileName.isBlank() || File(fileName).name != fileName) return null
+        val source = File(directory, fileName)
+        if (!source.isFile) return null
+        return try {
+            if (fileName.endsWith(".enc", ignoreCase = true)) {
+                val plaintext = decryptCaseBlob(source.readBytes())
+                BitmapFactory.decodeByteArray(plaintext, 0, plaintext.size)
+            } else {
+                // Backward compatibility for cases saved by older unencrypted versions.
+                BitmapFactory.decodeFile(source.absolutePath)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun writeMaskSnapshot(
         directory: File,
         prefix: String,
@@ -2019,9 +2112,9 @@ class MainActivity : AppCompatActivity() {
         result: BrowSegmentationResult?
     ): org.json.JSONObject? {
         if (result == null || result.overlay.isRecycled) return null
-        val fileName = prefix + "_" + suffix + ".png"
+        val fileName = prefix + "_" + suffix + ".png.enc"
         val target = File(directory, fileName)
-        if (!writeBitmapVersioned(result.overlay, target, Bitmap.CompressFormat.PNG, 100)) {
+        if (!writeEncryptedBitmapVersioned(result.overlay, target, Bitmap.CompressFormat.PNG, 100)) {
             throw IllegalStateException("无法保存识别轮廓")
         }
         val regionsJson = org.json.JSONArray()
@@ -2045,7 +2138,7 @@ class MainActivity : AppCompatActivity() {
         if (metadata == null) return null
         val fileName = metadata.optString("mask_file", "")
         if (fileName.isBlank() || File(fileName).name != fileName) return null
-        val bitmap = BitmapFactory.decodeFile(File(directory, fileName).absolutePath) ?: return null
+        val bitmap = decodeCaseBitmap(directory, fileName) ?: return null
         val regions = mutableListOf<IntArray>()
         val regionArray = metadata.optJSONArray("regions")
         if (regionArray != null) {
@@ -2071,12 +2164,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun readCaseManifest(directory: File): org.json.JSONObject? {
-        val manifest = File(directory, "case.json")
-        val backup = File(directory, "case.json.bak")
-        for (candidate in listOf(manifest, backup)) {
+        val candidates = listOf(
+            File(directory, "case.json.enc"),
+            File(directory, "case.json.enc.bak"),
+            // Read legacy manifests from the earlier app version, then migrate on next save.
+            File(directory, "case.json"),
+            File(directory, "case.json.bak")
+        )
+        for (candidate in candidates) {
             if (!candidate.isFile) continue
             try {
-                return org.json.JSONObject(candidate.readText(Charsets.UTF_8))
+                val bytes = candidate.readBytes()
+                val plaintext = if (candidate.name.endsWith(".enc") || candidate.name.endsWith(".enc.bak")) {
+                    decryptCaseBlob(bytes)
+                } else {
+                    bytes
+                }
+                return org.json.JSONObject(String(plaintext, Charsets.UTF_8))
             } catch (_: Exception) {
                 // Try the last known good backup if the newest write was interrupted.
             }
@@ -2101,8 +2205,8 @@ class MainActivity : AppCompatActivity() {
         val directory = File(caseLibraryRoot(), recordId)
         if (!directory.exists() && !directory.mkdirs()) return false
         val timestamp = System.currentTimeMillis()
-        val photoFileName = "photo_" + timestamp + ".jpg"
-        if (!writeBitmapVersioned(photo, File(directory, photoFileName), Bitmap.CompressFormat.JPEG, 94)) {
+        val photoFileName = "photo_" + timestamp + ".jpg.enc"
+        if (!writeEncryptedBitmapVersioned(photo, File(directory, photoFileName), Bitmap.CompressFormat.JPEG, 94)) {
             return false
         }
         return try {
@@ -2144,25 +2248,30 @@ class MainActivity : AppCompatActivity() {
                     depths.forEach { depth -> put(depth.toDouble()) }
                 })
                 put("plans", planJson)
-                put("storage_note", "Stored in app-private internal storage. This app does not upload the image. The image is not separately encrypted.")
+                put("storage_note", "Case photo, masks and manifest are encrypted with an Android Keystore AES-GCM key. Files are stored in app-private internal storage and are not uploaded. Copying the files to another device alone does not migrate the Keystore key.")
             }
-            val manifestFile = File(directory, "case.json")
-            val backupFile = File(directory, "case.json.bak")
-            val temporary = File(directory, "case.json.tmp")
+            val manifestFile = File(directory, "case.json.enc")
+            val backupFile = File(directory, "case.json.enc.bak")
+            val temporary = File(directory, "case.json.enc.tmp")
             if (manifestFile.isFile) manifestFile.copyTo(backupFile, overwrite = true)
+            val encryptedManifest = encryptCaseBlob(manifest.toString(2).toByteArray(Charsets.UTF_8))
             FileOutputStream(temporary).use { stream ->
-                stream.write(manifest.toString(2).toByteArray(Charsets.UTF_8))
+                stream.write(encryptedManifest)
                 stream.fd.sync()
             }
-            if (manifestFile.exists() && !manifestFile.delete()) throw IllegalStateException("无法替换案例索引")
+            if (manifestFile.exists() && !manifestFile.delete()) throw IllegalStateException("无法替换加密案例索引")
             if (!temporary.renameTo(manifestFile)) {
                 temporary.copyTo(manifestFile, overwrite = true)
                 temporary.delete()
             }
-            if (!manifestFile.isFile || manifestFile.length() == 0L) throw IllegalStateException("案例索引保存失败")
+            if (!manifestFile.isFile || manifestFile.length() == 0L) throw IllegalStateException("加密案例索引保存失败")
             backupFile.delete()
-            // Remove stale image snapshots only after the new manifest is committed.
-            keepFiles.add("case.json")
+            // Remove plaintext legacy manifests only after the new encrypted manifest is committed.
+            File(directory, "case.json").delete()
+            File(directory, "case.json.bak").delete()
+            File(directory, "case.json.tmp").delete()
+            // Remove stale encrypted or legacy image snapshots only after the new manifest is committed.
+            keepFiles.add("case.json.enc")
             directory.listFiles()?.filter { it.isFile && (it.name.startsWith("photo_") || it.name.startsWith("mask_")) }
                 ?.filter { it.name !in keepFiles }
                 ?.forEach { it.delete() }
@@ -2330,8 +2439,8 @@ class MainActivity : AppCompatActivity() {
                 if (manifest.optInt("schema_version", 0) != 1) throw IllegalStateException("不支持的案例版本")
                 val photoName = manifest.optString("photo_file", "")
                 if (photoName.isBlank() || File(photoName).name != photoName) throw IllegalStateException("案例照片路径无效")
-                photo = BitmapFactory.decodeFile(File(directory, photoName).absolutePath)
-                    ?: throw IllegalStateException("案例照片读取失败")
+                photo = decodeCaseBitmap(directory, photoName)
+                    ?: throw IllegalStateException("案例照片解密或读取失败。若病例文件来自另一台设备，需在原设备内导出可移交的加密包，不能只复制应用目录。")
                 val currentMask = readMaskSnapshot(directory, manifest.optJSONObject("current_segmentation"))
                 val planList = mutableListOf<BrowPlan>()
                 val storedPlans = manifest.optJSONArray("plans") ?: org.json.JSONArray()
