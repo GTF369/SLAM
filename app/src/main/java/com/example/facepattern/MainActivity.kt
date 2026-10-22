@@ -2950,14 +2950,8 @@ class MainActivity : AppCompatActivity() {
             isChecked = false
             isEnabled = measuredFactors.size == curvatureRegionNames.size
         }
-        val depthPreviewFactors = estimateDepthBasedCurvatureFactors(points, capturedLandmarkDepths)
-        val applyDepthCorrection = CheckBox(this).apply {
-            text = "尝试 MediaPipe 深度估计的区域长度修正（实验性）"
-            isChecked = false
-            isEnabled = depthPreviewFactors.size == curvatureRegionNames.size
-        }
         val note = TextView(this).apply {
-            text = "单张正面照片无法恢复真实三维眉弓。MediaPipe 的 z 值是相对深度估计，不是毫米级皮肤表面测量。优先使用顾客实测值；深度估计修正默认关闭，仅用于试验比较。所有方案都必须先通过打印后的 20 mm 校准。"
+            text = "安全限制：MediaPipe 的相对 z 不是毫米级皮肤表面测量，单张正面照片无法恢复真实三维眉弓。因此深度估计不会参与打印尺寸或曲面补偿。只有同一顾客、同一端点的八个区域都完成实测，才可以手动选择实验性长度修正。它仍不代表已验证的三维贴合。每次更换打印机、纸张或驱动设置后，都必须重新量取打印出的 20 mm 校准框。"
             textSize = 11f
             setPadding(dp(4), dp(2), dp(4), dp(2))
         }
@@ -2995,7 +2989,6 @@ class MainActivity : AppCompatActivity() {
             addView(resetPrintScale)
             addView(calibrationInfo)
             addView(applyCorrection)
-            addView(applyDepthCorrection)
             addView(note)
         }
         AlertDialog.Builder(this)
@@ -3039,26 +3032,15 @@ class MainActivity : AppCompatActivity() {
                     return@setPositiveButton
                 }
                 val useMeasuredCurvature = applyCorrection.isChecked
-                val useDepthCurvature = applyDepthCorrection.isChecked && !useMeasuredCurvature
                 if (useMeasuredCurvature && measuredFactors.size != curvatureRegionNames.size) {
                     Toast.makeText(this, "8 个区域的实测值不完整，不能应用实测区域修正", Toast.LENGTH_LONG).show()
                     return@setPositiveButton
                 }
-                val depthFactors = if (useDepthCurvature) {
-                    estimateDepthBasedCurvatureFactors(points, capturedLandmarkDepths)
-                } else {
-                    emptyMap()
-                }
-                if (useDepthCurvature && depthFactors.size != curvatureRegionNames.size) {
-                    Toast.makeText(this, "MediaPipe 深度关键点不完整，不能应用估计修正", Toast.LENGTH_LONG).show()
-                    return@setPositiveButton
-                }
-                val useCurvature = useMeasuredCurvature || useDepthCurvature
-                val factorsToApply = when {
-                    useMeasuredCurvature -> measuredFactors
-                    useDepthCurvature -> depthFactors
-                    else -> emptyMap()
-                }
+                // Do not inject MediaPipe relative-z estimates into physical print geometry.
+                // A future release must calibrate a real 3D method against independent
+                // measurements and held-out stencil-transfer error before it is eligible.
+                val useCurvature = useMeasuredCurvature
+                val factorsToApply = if (useMeasuredCurvature) measuredFactors else emptyMap()
                 val template = BrowRenderer.createTemplate(
                     points,
                     params,
