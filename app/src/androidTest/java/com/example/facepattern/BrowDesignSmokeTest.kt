@@ -150,7 +150,8 @@ class BrowDesignSmokeTest {
                 if (caseDirectory == null) SystemClock.sleep(200L)
             }
             assertNotNull("Case manifest was not written", caseDirectory)
-            val manifest = File(caseDirectory, "case.json")
+            val savedDirectory = caseDirectory ?: throw AssertionError("Case manifest was not written")
+            val manifest = File(savedDirectory, "case.json")
             assertTrue(manifest.readText(Charsets.UTF_8).contains("QA_CASE_2026"))
             val photoName = org.json.JSONObject(manifest.readText(Charsets.UTF_8)).getString("photo_file")
             assertTrue("Persisted case photo is missing", File(caseDirectory, photoName).isFile)
