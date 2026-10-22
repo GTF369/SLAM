@@ -3,6 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 val releaseKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+// The emulator smoke build uses x86_64 because the production APK is intentionally ARM64-only.
+val emulatorSmokeBuild = project.findProperty("emulatorSmoke")?.toString()?.toBoolean() == true
 
 android {
     namespace = "com.example.facepattern"
@@ -16,7 +18,7 @@ android {
         // Self-use target: OPPO Find X7 / modern ARM64 Android phones.
         // Keeping only this ABI avoids bundling unused x86 and 32-bit native runtimes.
         ndk {
-            abiFilters += listOf("arm64-v8a")
+            abiFilters += listOf(if (emulatorSmokeBuild) "x86_64" else "arm64-v8a")
         }
     }
     signingConfigs {
