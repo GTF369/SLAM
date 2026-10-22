@@ -315,6 +315,9 @@ class MainActivity : AppCompatActivity() {
             "1:1 打印" to { askPrintCalibration() }
         ))
         addButtonRow(designControls, listOf(
+            "导出方案册 PDF" to { exportPlanBookPdf() }
+        ))
+        addButtonRow(designControls, listOf(
             "导出原始标注照片" to { exportOriginalPhotoForAnnotation() }
         ))
         addButtonRow(designControls, listOf(
@@ -1120,6 +1123,182 @@ class MainActivity : AppCompatActivity() {
             .setTitle("方案对比")
             .setView(scroller)
             .setPositiveButton("完成", null)
+            .show()
+    }
+
+    private fun exportPlanBookPdf() {
+        val photo = capturedPhoto
+        val points = browView.facePoints()
+        if (photo == null || photo.isRecycled || points.size < 455) {
+            Toast.makeText(this, "请先拍摄并完成眉形设计", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (savedPlans.isEmpty()) {
+            Toast.makeText(this, "请先保存至少一套方案", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("导出眉形方案册")
+            .setMessage(
+                "PDF 将包含人脸效果预览、各方案名称和参数，并保存到本机下载目录。文件含可识别的人脸图像，请确认顾客已同意保存或分享效果预览。该方案册不是 1:1 拓描模板，实际打印尺寸仍须使用专用打印校准流程。"
+            )
+            .setNegativeButton("取消", null)
+            .setPositiveButton("确认并导出") { _, _ ->
+                var document: android.graphics.pdf.PdfDocument? = null
+                var output: java.io.OutputStream? = null
+                var uri: android.net.Uri? = null
+                try {
+                    val pageWidth = 595
+                    val pageHeight = 842
+                    val margin = 28f
+                    val gap = 14f
+                    val itemsPerPage = 4
+                    val cardWidth = (pageWidth - margin * 2f - gap) / 2
+                    val cardHeight = 352f
+                    val headerHeight = 72f
+                    val footerY = pageHeight - 20f
+                    val doc = android.graphics.pdf.PdfDocument()
+                    document = doc
+
+                    val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color = Color.rgb(34, 39, 34)
+                        textSize = 21f
+                        typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+                    }
+                    val subtitlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color = Color.DKGRAY
+                        textSize = 9f
+                    }
+                    val cardPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color = Color.rgb(247, 247, 242)
+                        style = Paint.Style.FILL
+                    }
+                    val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color = Color.rgb(218, 220, 211)
+                        style = Paint.Style.STROKE
+                        strokeWidth = 0.8f
+                    }
+                    val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+                    val plans = savedPlans.toList()
+                    val pageCount = (plans.size + itemsPerPage - 1) / itemsPerPage
+
+                    for (pageIndex in 0 until pageCount) {
+                        val pageInfo = android.graphics.pdf.PdfDocument.PageInfo.Builder(
+                            pageWidth, pageHeight, pageIndex + 1
+                        ).create()
+                        val page = doc.startPage(pageInfo)
+                        val canvas = page.canvas
+                        canvas.drawColor(Color.WHITE)
+                        canvas.drawText("眉形设计方案册", margin, 34f, titlePaint)
+                        canvas.drawText(
+                            "匿名案例 " + currentCaseId + "    生成时间 " +
+                                java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date()),
+                            margin, 52f, subtitlePaint
+                        )
+                        canvas.drawText(
+                            "效果预览，仅用于方案沟通；不是 1:1 拓描稿，也不代表已验证的三维曲面贴合。",
+                            margin, 66f, subtitlePaint
+                        )
+
+                        val startIndex = pageIndex * itemsPerPage
+                        val endIndex = min(plans.size, startIndex + itemsPerPage)
+                        for (index in startIndex until endIndex) {
+                            val localIndex = index - startIndex
+                            val column = localIndex % 2
+                            val row = localIndex / 2
+                            val x = margin + column * (cardWidth + gap)
+                            val y = headerHeight + row * (cardHeight + gap)
+                            val card = RectF(x, y, x + cardWidth, y + cardHeight)
+                            canvas.drawRoundRect(card, 8f, 8f, cardPaint)
+                            canvas.drawRoundRect(card, 8f, 8f, borderPaint)
+                            val plan = plans[index]
+                            val cardTitlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                color = Color.rgb(34, 39, 34)
+                                textSize = 13f
+                                typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+                            }
+                            canvas.drawText((index + 1).toString() + ". " + plan.name.take(22), x + 10f, y + 18f, cardTitlePaint)
+
+                            val preview = BrowRenderer.renderPreview(
+                                photo, points, plan.params, 480, plan.segmentationSnapshot, plan.useNativeShape
+                            )
+                            try {
+                                val imageBounds = RectF(x + 10f, y + 28f, x + cardWidth - 10f, y + 270f)
+                                val fit = min(
+                                    imageBounds.width() / preview.width.coerceAtLeast(1),
+                                    imageBounds.height() / preview.height.coerceAtLeast(1)
+                                )
+                                val drawWidth = preview.width * fit
+                                val drawHeight = preview.height * fit
+                                val left = imageBounds.centerX() - drawWidth / 2f
+                                val top = imageBounds.centerY() - drawHeight / 2f
+                                canvas.drawBitmap(
+                                    preview, null,
+                                    RectF(left, top, left + drawWidth, top + drawHeight),
+                                    bitmapPaint
+                                )
+                            } finally {
+                                if (!preview.isRecycled) preview.recycle()
+                            }
+
+                            val parameterPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                color = Color.rgb(47, 51, 45)
+                                textSize = 10f
+                            }
+                            canvas.drawText("粗细 x" + String.format(java.util.Locale.US, "%.2f", plan.params.thickness), x + 10f, y + 292f, parameterPaint)
+                            canvas.drawText("长度 x" + String.format(java.util.Locale.US, "%.2f", plan.params.length), x + 10f, y + 308f, parameterPaint)
+                            canvas.drawText("弧度 x" + String.format(java.util.Locale.US, "%.2f", plan.params.arch), x + 10f, y + 324f, parameterPaint)
+                            val styleName = when (plan.params.style) {
+                                1 -> "柔和款"
+                                2 -> "立体款"
+                                else -> "自然款"
+                            }
+                            val baseName = if (plan.useNativeShape) " · 原生眉区轮廓" else " · 参数化底稿"
+                            canvas.drawText("风格：" + styleName + baseName, x + 10f, y + 340f, parameterPaint)
+                        }
+                        canvas.drawText(
+                            "请由纹绣师与顾客共同确认。打印时关闭自动缩放并测量专用 20 mm 校准框。",
+                            margin, footerY, subtitlePaint
+                        )
+                        canvas.drawText((pageIndex + 1).toString() + " / " + pageCount, pageWidth - margin - 28f, footerY, subtitlePaint)
+                        doc.finishPage(page)
+                    }
+
+                    val filename = "眉形方案册_" + System.currentTimeMillis() + ".pdf"
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        val values = ContentValues().apply {
+                            put(MediaStore.Downloads.DISPLAY_NAME, filename)
+                            put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
+                            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/BrowDesign")
+                            put(MediaStore.Downloads.IS_PENDING, 1)
+                        }
+                        uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                            ?: throw IllegalStateException("无法创建 PDF 文件")
+                        output = contentResolver.openOutputStream(uri!!)
+                            ?: throw IllegalStateException("无法写入 PDF 文件")
+                        doc.writeTo(output!!)
+                        output.close()
+                        output = null
+                        values.clear()
+                        values.put(MediaStore.Downloads.IS_PENDING, 0)
+                        contentResolver.update(uri!!, values, null, null)
+                        Toast.makeText(this, "方案册已保存到 Downloads/BrowDesign/" + filename, Toast.LENGTH_LONG).show()
+                    } else {
+                        val directory = File(getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "BrowDesign")
+                        if (!directory.exists() && !directory.mkdirs()) throw IllegalStateException("无法创建保存目录")
+                        val file = File(directory, filename)
+                        FileOutputStream(file).use { stream -> doc.writeTo(stream) }
+                        Toast.makeText(this, "方案册已保存：" + file.absolutePath, Toast.LENGTH_LONG).show()
+                    }
+                } catch (e: Exception) {
+                    if (uri != null) contentResolver.delete(uri!!, null, null)
+                    Toast.makeText(this, "导出方案册失败：" + (e.message ?: "请重试"), Toast.LENGTH_LONG).show()
+                } finally {
+                    try { output?.close() } catch (_: Exception) {}
+                    try { document?.close() } catch (_: Exception) {}
+                }
+            }
             .show()
     }
 
