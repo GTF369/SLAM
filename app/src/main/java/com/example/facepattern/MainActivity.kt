@@ -178,6 +178,46 @@ class MainActivity : AppCompatActivity() {
             analyzeImportedPhoto(uri)
         }
     }
+    private var pendingPortableCaseExport: ByteArray? = null
+    private val portableCaseExportLauncher =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+            val payload = pendingPortableCaseExport
+            pendingPortableCaseExport = null
+            if (uri == null) {
+                payload?.fill(0)
+                return@registerForActivityResult
+            }
+            if (payload == null) {
+                Toast.makeText(this, "备份内容已失效，请重新导出", Toast.LENGTH_LONG).show()
+                return@registerForActivityResult
+            }
+            Thread({
+                var failure: String? = null
+                try {
+                    contentResolver.openOutputStream(uri, "w")?.use { output ->
+                        output.write(payload)
+                        output.flush()
+                    } ?: throw IllegalStateException("无法写入所选备份位置")
+                } catch (e: Exception) {
+                    failure = e.message ?: "备份文件写入失败"
+                    try { contentResolver.delete(uri, null, null) } catch (_: Exception) {}
+                } finally {
+                    payload.fill(0)
+                }
+                runOnUiThread {
+                    Toast.makeText(
+                        this,
+                        if (failure == null) "加密案例备份已保存。请妥善保管独立口令，丢失后无法恢复。"
+                        else "备份写入失败：" + failure,
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }, "PortableCaseExport").start()
+        }
+    private val portableCaseImportLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) promptPortableCaseImportPassword(uri)
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -430,6 +470,10 @@ class MainActivity : AppCompatActivity() {
         addButtonRow(designControls, listOf(
             "保存本机案例" to { saveCurrentCaseToLibrary() },
             "案例库" to { openSavedCaseLibrary() }
+        ))
+        addButtonRow(designControls, listOf(
+            "导出加密案例" to { exportPortableCaseBackup() },
+            "导入加密案例" to { launchPortableCaseImport() }
         ))
         addButtonRow(designControls, listOf(
             "导出方案册 PDF" to { exportPlanBookPdf() }
@@ -2571,6 +2615,334 @@ class MainActivity : AppCompatActivity() {
                 }
                 dialog.show()
             }
+    }
+
+
+    private fun exportPortableCaseBackup() {
+        val root = caseLibraryRoot()
+        val directories = root.listFiles()
+            ?.filter { it.isDirectory && readCaseManifest(it) != null }
+            ?.sortedByDescending { it.lastModified() }
+            .orEmpty()
+        if (directories.isEmpty()) {
+            Toast.makeText(this, "本机案例库为空。请先保存一个案例再导出备份。", Toast.LENGTH_LONG).show()
+            return
+        }
+        val names = directories.map { directory ->
+            val metadata = readCaseManifest(directory)
+            val display = metadata?.optString("display_name", directory.name).orEmpty()
+                .ifBlank { directory.name }
+            val code = metadata?.optString("anonymous_case_id", "").orEmpty()
+            val date = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
+                .format(java.util.Date(metadata?.optLong("saved_at", directory.lastModified()) ?: directory.lastModified()))
+            "$display  ·  $date" + if (code.isBlank()) "" else "\n匿名编号：$code"
+        }.toTypedArray()
+        var selectedIndex = 0
+        AlertDialog.Builder(this)
+            .setTitle("选择要导出的已保存案例")
+            .setSingleChoiceItems(names, selectedIndex) { _, which -> selectedIndex = which }
+            .setMessage("导出的是案例库中最近一次保存的版本。若当前编辑尚未保存，请先保存案例。备份将使用独立口令加密，不会导出本设备的 Android Keystore 密钥。")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("下一步") { _, _ ->
+                val selected = directories.getOrNull(selectedIndex)
+                if (selected == null) {
+                    Toast.makeText(this, "没有选中有效案例", Toast.LENGTH_SHORT).show()
+                } else {
+                    promptPortableCaseExportPassword(selected)
+                }
+            }
+            .show()
+    }
+
+    private fun promptPortableCaseExportPassword(directory: File) {
+        val password = EditText(this).apply {
+            hint = "独立备份口令，至少 12 个字符"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setSingleLine(true)
+        }
+        val confirmation = EditText(this).apply {
+            hint = "再次输入备份口令"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setSingleLine(true)
+        }
+        val consent = CheckBox(this).apply {
+            text = "我已取得顾客对导出加密案例备份的明确授权"
+            isChecked = false
+        }
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(8), dp(18), 0)
+            addView(TextView(this@MainActivity).apply {
+                text = "备份包含顾客照片、眉形轮廓和方案参数。文件将在你选择的位置保存，应用不会上传。口令不存储在应用中，忘记口令后无法恢复。建议使用唯一且足够长的口令，并与备份文件分开保管。"
+                textSize = 13f
+            })
+            addView(password)
+            addView(confirmation)
+            addView(consent)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("创建口令保护的案例备份")
+            .setView(form)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("加密并导出", null)
+            .create().also { dialog ->
+                dialog.setOnShowListener {
+                    val exportButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                    fun refreshEnabled() {
+                        val first = password.text.toString()
+                        exportButton.isEnabled = consent.isChecked &&
+                            first.length >= 12 && first == confirmation.text.toString()
+                    }
+                    val watcher = object : TextWatcher {
+                        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+                        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = refreshEnabled()
+                        override fun afterTextChanged(s: Editable?) = Unit
+                    }
+                    password.addTextChangedListener(watcher)
+                    confirmation.addTextChangedListener(watcher)
+                    consent.setOnCheckedChangeListener { _, _ -> refreshEnabled() }
+                    refreshEnabled()
+                    exportButton.setOnClickListener {
+                        val first = password.text.toString()
+                        if (first.length < 12 || first != confirmation.text.toString() || !consent.isChecked) {
+                            Toast.makeText(this, "请确认口令不少于 12 个字符、两次输入一致并取得授权", Toast.LENGTH_LONG).show()
+                            return@setOnClickListener
+                        }
+                        val passwordChars = first.toCharArray()
+                        password.text?.clear()
+                        confirmation.text?.clear()
+                        dialog.dismiss()
+                        createPortableCaseBackup(directory, passwordChars)
+                    }
+                }
+                dialog.show()
+            }
+    }
+
+    private fun createPortableCaseBackup(directory: File, password: CharArray) {
+        status.text = "正在生成口令保护的案例备份…"
+        Thread({
+            var archiveBytes: ByteArray? = null
+            var encryptedBundle: ByteArray? = null
+            val plainFiles = linkedMapOf<String, ByteArray>()
+            var displayName = "眉形案例"
+            var failure: String? = null
+            try {
+                val manifest = readCaseManifest(directory) ?: throw IllegalStateException("案例索引损坏，无法导出")
+                displayName = manifest.optString("display_name", "眉形案例").take(50).ifBlank { "眉形案例" }
+                val fileNames = PortableCaseBackup.referencedFiles(manifest)
+                for (name in fileNames) {
+                    val source = File(directory, name)
+                    if (!source.isFile || source.length() > PortableCaseBackup.MAX_ARCHIVE_BYTES) {
+                        throw IllegalStateException("案例文件缺失或过大：$name。旧格式案例请先打开并重新保存。")
+                    }
+                    plainFiles[name] = decryptCaseBlob(source.readBytes())
+                }
+                archiveBytes = PortableCaseBackup.pack(manifest, plainFiles)
+                encryptedBundle = PortableCaseBackup.encrypt(archiveBytes, password)
+            } catch (e: Exception) {
+                failure = e.message ?: "案例加密失败"
+            } finally {
+                password.fill('\u0000')
+                plainFiles.values.forEach { it.fill(0) }
+                archiveBytes?.fill(0)
+            }
+            val payload = encryptedBundle
+            runOnUiThread {
+                status.text = if (failure == null) "加密案例包已准备好，请选择保存位置" else "案例备份失败"
+                if (failure != null || payload == null) {
+                    encryptedBundle?.fill(0)
+                    Toast.makeText(this, "案例备份失败：" + (failure ?: "加密结果为空"), Toast.LENGTH_LONG).show()
+                    return@runOnUiThread
+                }
+                if (pendingPortableCaseExport != null) pendingPortableCaseExport?.fill(0)
+                pendingPortableCaseExport = payload
+                val safeName = displayName
+                    .map { if (it.isLetterOrDigit() || it == '_' || it == '-') it else '_' }
+                    .joinToString("")
+                    .trim('_')
+                    .take(32)
+                    .ifBlank { "brow_case" }
+                portableCaseExportLauncher.launch("${safeName}_${System.currentTimeMillis()}.browbackup")
+            }
+        }, "PortableCaseExportBuild").start()
+    }
+
+    private fun launchPortableCaseImport() {
+        portableCaseImportLauncher.launch(arrayOf("*/*"))
+    }
+
+    private fun promptPortableCaseImportPassword(uri: Uri) {
+        val password = EditText(this).apply {
+            hint = "输入备份口令（至少 12 个字符）"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setSingleLine(true)
+        }
+        val consent = CheckBox(this).apply {
+            text = "我已取得顾客对导入、恢复这份人脸案例的明确授权"
+            isChecked = false
+        }
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(8), dp(18), 0)
+            addView(TextView(this@MainActivity).apply {
+                text = "应用会先验证备份口令、加密完整性和文件结构，再将导入案例重新使用本设备的 Keystore 加密保存。原备份文件不会被修改，内容不会上传。"
+                textSize = 13f
+            })
+            addView(password)
+            addView(consent)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("导入加密案例备份")
+            .setView(form)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("验证并导入", null)
+            .create().also { dialog ->
+                dialog.setOnShowListener {
+                    val importButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                    fun refreshEnabled() {
+                        importButton.isEnabled = consent.isChecked && password.text.length >= 12
+                    }
+                    password.addTextChangedListener(object : TextWatcher {
+                        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+                        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = refreshEnabled()
+                        override fun afterTextChanged(s: Editable?) = Unit
+                    })
+                    consent.setOnCheckedChangeListener { _, _ -> refreshEnabled() }
+                    refreshEnabled()
+                    importButton.setOnClickListener {
+                        val pass = password.text.toString()
+                        if (pass.length < 12 || !consent.isChecked) return@setOnClickListener
+                        val passwordChars = pass.toCharArray()
+                        password.text?.clear()
+                        dialog.dismiss()
+                        importPortableCaseBackup(uri, passwordChars)
+                    }
+                }
+                dialog.show()
+            }
+    }
+
+    private fun readBoundedInput(uri: Uri, maxBytes: Int): ByteArray {
+        val result = ByteArrayOutputStream()
+        contentResolver.openInputStream(uri)?.use { input ->
+            val buffer = ByteArray(8192)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                if (result.size().toLong() + count.toLong() > maxBytes.toLong()) {
+                    throw IllegalArgumentException("备份文件超过大小限制")
+                }
+                result.write(buffer, 0, count)
+            }
+        } ?: throw IllegalStateException("无法读取选定备份文件")
+        return result.toByteArray().also {
+            if (it.isEmpty()) throw IllegalArgumentException("备份文件为空")
+        }
+    }
+
+    private fun validatePortableCaseImages(archive: PortableCaseBackup.Archive) {
+        val manifest = archive.manifest
+        val photoName = manifest.optString("photo_file", "")
+        val referenced = PortableCaseBackup.referencedFiles(manifest)
+        require(referenced.contains(photoName)) { "备份缺少案例照片" }
+        archive.files.forEach { (name, bytes) ->
+            require(name in referenced) { "备份包含不属于当前案例的文件" }
+            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                ?: throw IllegalArgumentException("备份图像解码失败：$name")
+            require(bitmap.width in 1..12000 && bitmap.height in 1..12000) {
+                bitmap.recycle()
+                "备份图像尺寸超出安全范围：$name"
+            }
+            bitmap.recycle()
+        }
+    }
+
+    private fun importPortableCaseBackup(uri: Uri, password: CharArray) {
+        status.text = "正在验证并导入加密案例…"
+        Thread({
+            var bundle: ByteArray? = null
+            var archiveBytes: ByteArray? = null
+            var archive: PortableCaseBackup.Archive? = null
+            var targetDirectory: File? = null
+            var failure: String? = null
+            var importedName = "眉形案例"
+            try {
+                bundle = readBoundedInput(uri, PortableCaseBackup.MAX_ENCRYPTED_BUNDLE_BYTES)
+                archiveBytes = PortableCaseBackup.decrypt(bundle, password)
+                archive = PortableCaseBackup.unpack(archiveBytes)
+                validatePortableCaseImages(archive)
+                val sourceManifest = archive.manifest
+                importedName = sourceManifest.optString("display_name", "眉形案例").take(100).ifBlank { "眉形案例" }
+                val newRecordId = UUID.randomUUID().toString()
+                targetDirectory = File(caseLibraryRoot(), newRecordId)
+                check(targetDirectory!!.mkdirs()) { "无法创建导入案例目录" }
+
+                archive.files.forEach { (name, plaintext) ->
+                    val destination = File(targetDirectory, name)
+                    val encryptedFile = encryptCaseBlob(plaintext)
+                    try {
+                        FileOutputStream(destination).use { output ->
+                            output.write(encryptedFile)
+                            output.fd.sync()
+                        }
+                    } finally {
+                        encryptedFile.fill(0)
+                    }
+                }
+
+                val manifest = org.json.JSONObject(sourceManifest.toString()).apply {
+                    put("record_id", newRecordId)
+                    put("display_name", importedName)
+                    put("saved_at", System.currentTimeMillis())
+                    put(
+                        "storage_note",
+                        "Portable backup imported and re-encrypted on this device with a new Android Keystore AES-GCM key. The portable backup was protected by an independent user-supplied password. The password is not stored."
+                    )
+                }
+                val manifestBytes = manifest.toString().toByteArray(Charsets.UTF_8)
+                val encryptedManifest = encryptCaseBlob(manifestBytes)
+                try {
+                    FileOutputStream(File(targetDirectory, "case.json.enc")).use { output ->
+                        output.write(encryptedManifest)
+                        output.fd.sync()
+                    }
+                } finally {
+                    manifestBytes.fill(0)
+                    encryptedManifest.fill(0)
+                }
+
+                val reread = readCaseManifest(targetDirectory!!) ?: throw IllegalStateException("导入案例索引无法重新读取")
+                require(reread.optString("record_id") == newRecordId) { "导入案例编号校验失败" }
+                val photoName = reread.optString("photo_file", "")
+                val restoredPhoto = decodeCaseBitmap(targetDirectory!!, photoName)
+                    ?: throw IllegalStateException("导入案例照片无法恢复")
+                restoredPhoto.recycle()
+                targetDirectory!!.listFiles()?.filter { it.name.endsWith(".tmp") }?.forEach { it.delete() }
+            } catch (e: Exception) {
+                failure = when (e) {
+                    is javax.crypto.AEADBadTagException -> "口令错误，或备份数据已被篡改"
+                    is java.security.GeneralSecurityException -> "无法解密备份。请检查口令和文件完整性。"
+                    else -> e.message ?: "导入失败"
+                }
+                targetDirectory?.deleteRecursively()
+            } finally {
+                password.fill('\u0000')
+                bundle?.fill(0)
+                archiveBytes?.fill(0)
+                archive?.files?.values?.forEach { it.fill(0) }
+            }
+            runOnUiThread {
+                if (failure == null) {
+                    status.text = "加密案例已恢复到本机，可在案例库中打开"
+                    Toast.makeText(this, "已导入“$importedName”。案例已用本设备密钥重新加密。", Toast.LENGTH_LONG).show()
+                    openSavedCaseLibrary()
+                } else {
+                    status.text = "加密案例导入失败"
+                    Toast.makeText(this, "导入失败：" + failure, Toast.LENGTH_LONG).show()
+                }
+            }
+        }, "PortableCaseImport").start()
     }
 
     private fun openSavedCaseLibrary() {
