@@ -69,6 +69,27 @@ jobs:
           PY
       - name: Build debug APK
         run: gradle --no-daemon assembleDebug
+      - name: Launch the built APK on an Android emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: Pixel_2
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            adb logcat -c
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb shell pm grant com.example.facepattern android.permission.CAMERA
+            adb shell am start -W -n com.example.facepattern/.MainActivity
+            sleep 8
+            adb shell pidof com.example.facepattern
+            if adb logcat -d -s AndroidRuntime:E | grep -q "FATAL EXCEPTION"; then
+              adb logcat -d -s AndroidRuntime:E
+              echo "Android emulator reported a fatal app exception"
+              exit 1
+            fi
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
