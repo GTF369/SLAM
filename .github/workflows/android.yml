@@ -87,14 +87,17 @@ jobs:
             adb wait-for-device
             adb shell getprop sys.boot_completed
             adb logcat -c
-            if ! timeout 15m gradle --no-daemon clean connectedDebugAndroidTest -PemulatorSmoke=true; then
-              status=$?
+            set +e
+            timeout 15m gradle --no-daemon clean connectedDebugAndroidTest -PemulatorSmoke=true
+            status=$?
+            set -e
+            if [ "$status" -ne 0 ]; then
               echo "Android instrumentation tests failed or timed out (exit $status)"
               adb devices || true
               adb shell dumpsys activity activities || true
               adb logcat -d -s AndroidRuntime:E || true
               find app/build/outputs/androidTest-results app/build/reports/androidTests -maxdepth 5 -type f -print || true
-              exit "${status:-1}"
+              exit "$status"
             fi
             if ! adb shell pm grant com.example.facepattern android.permission.CAMERA; then
               adb logcat -d -s AndroidRuntime:E || true
