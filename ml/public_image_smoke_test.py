@@ -163,7 +163,35 @@ def run_case(image_path: Path, case_name: str, landmarker, session, out_dir: Pat
     report["parser_output_shape"] = list(logits.shape)
     report["face_crop_xyxy"] = [crop_left, crop_top, crop_left + side, crop_top + side]
     report["parser_class_pixels"] = {str(i): int(counts[i]) for i in range(19)}
+    class_bboxes = {}
+    for class_id in range(1, 19):
+        class_y, class_x = np.where(labels == class_id)
+        if len(class_x):
+            class_bboxes[str(class_id)] = [int(class_x.min()), int(class_y.min()), int(class_x.max()) + 1, int(class_y.max()) + 1]
+    report["parser_class_bboxes_model_xyxy"] = class_bboxes
     report["class_6_7_pixels_percent_of_face_crop"] = round(float(np.mean((labels == 6) | (labels == 7)) * 100), 3)
+    if case_name == "virtual_makeup_demo":
+        # Diagnostic contact sheet to verify the model label map visually.
+        from PIL import ImageDraw
+        tiles = []
+        for class_id in range(2, 9):
+            class_mask = Image.fromarray(((labels == class_id).astype(np.uint8) * 255)).resize((side, side), Image.Resampling.NEAREST)
+            model_mask_full = np.zeros((h, w), dtype=bool)
+            model_mask_full[crop_top:crop_top + side, crop_left:crop_left + side] = np.asarray(class_mask) > 0
+            tile = image.copy()
+            tint = np.zeros_like(tile)
+            tint[:, :, 0] = 250
+            tint[:, :, 1] = 65 + (class_id * 19) % 150
+            tile[model_mask_full] = (tile[model_mask_full].astype(np.float32) * 0.35 + tint[model_mask_full].astype(np.float32) * 0.65).clip(0, 255).astype(np.uint8)
+            thumb = Image.fromarray(tile).resize((250, 244), Image.Resampling.LANCZOS)
+            draw = ImageDraw.Draw(thumb)
+            draw.rectangle((0, 0, 249, 20), fill=(0, 0, 0))
+            draw.text((5, 4), f"class {class_id}: {int(counts[class_id])} px", fill=(255, 255, 255))
+            tiles.append(thumb)
+        sheet = Image.new("RGB", (750, 732), (245, 245, 245))
+        for idx, tile in enumerate(tiles):
+            sheet.paste(tile, ((idx % 3) * 250, (idx // 3) * 244))
+        sheet.save(out_dir / "model_class_2_to_8_contact_sheet.jpg", quality=92)
     local_brow_labels = (labels == 6) | (labels == 7)
     ys, xs = np.where(local_brow_labels)
     if len(xs):
