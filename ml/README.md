@@ -93,6 +93,35 @@ The directly measured ratio is
 
 `k = measured skin-surface arc length / measured chord length`.
 
+**Do not use this ratio directly as the print correction factor.** The print path now
+computes the current photo's projected length for the same region and converts it to
+millimetres using the measured interpupillary distance:
+
+`projected_segment_mm = projected_segment_px / pupil_distance_px * measured_IPD_mm`
+
+`print_factor = measured_surface_arc_mm / projected_segment_mm`
+
+The app applies the factor per eyebrow region to the corresponding 2D contour segments.
+It rejects a missing region, unusable segment, or factor outside [0.75, 1.60] rather than
+silently clamping a physically inconsistent measurement. The arc/chord ratio still serves
+as a consistency check and a local circular-arc approximation input. This is a measured
+2D-to-surface length mapping, **not** reconstruction of an unknown 3D face from one photo.
+It is only enabled by explicit user choice and still requires independent surface/transfer
+validation before it can be relied upon in a salon.
+
+A deterministic numerical test is available with:
+
+```bash
+python ml/simulate_surface_compensation.py --output surface_compensation_sandbox_report.json
+```
+
+The sandbox creates known synthetic curved 3D paths, projects them into a camera image,
+and checks the mapping arithmetic. It does not validate real face geometry, camera pose,
+printer scaling, or skin transfer. In addition, `python ml/simulate_brow_ranker_sandbox.py`
+tests ranking and Platt-calibration plumbing against synthetic labels with known probabilities.
+Its report always sets `release_approved: false`. Synthetic probabilities must never be
+displayed as real-customer suitability probabilities or shipped as the app's ranking model.
+
 For an ideal circular arc with chord (c) and radius (R), (s = 2R\arcsin(c/(2R))) and (k=s/c). Real brow ridges are not perfect circular arcs. A single frontal photograph or MediaPipe relative-z values do not provide true millimetre-scale 3D geometry.
 
 Follow [CURVATURE_PROTOCOL.md](CURVATURE_PROTOCOL.md): consistent endpoints, repeat measurements, customer-level grouping, staff-to-staff repeatability checks, and an independent 3D or reliable physical reference. Before any factor is embedded in normal printing, validate the expected coverage of the regional interval and measure actual stencil transfer errors on unseen customers.
