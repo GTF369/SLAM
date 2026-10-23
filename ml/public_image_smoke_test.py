@@ -19,6 +19,7 @@ import mediapipe as mp
 import numpy as np
 import onnxruntime as ort
 from PIL import Image, ImageEnhance, ImageFilter
+from brow_mask_quality import is_plausible_brow_mask
 
 PARSING_SIZE = 384
 MEAN_BGR = np.array([143.55267075, 132.96705975, 126.94924335], dtype=np.float32)
@@ -214,16 +215,26 @@ def run_case(image_path: Path, case_name: str, landmarker, session, out_dir: Pat
         model_mask = map_labels_to_roi(labels, crop_left, crop_top, side, b)
         roi = image[y0:y1, x0:x1]
         model_count = int(model_mask.sum())
-        minimum = max(5, int(model_mask.size * 0.003))
-        used_model = model_count >= minimum
-        chosen = model_mask if used_model else adaptive_mask(roi)
+        minimum = max(5, int(model_mask.size * 0.005))
+        used_model = model_count >= minimum and is_plausible_brow_mask(model_count, model_mask.size)
+        candidate = model_mask if used_model else adaptive_mask(roi)
+        candidate_count = int(candidate.sum())
+        candidate_accepted = is_plausible_brow_mask(candidate_count, candidate.size)
+        # Fail closed: an empty or oversized contour is left for manual brush correction.
+        chosen = candidate if candidate_accepted else np.zeros_like(candidate, dtype=bool)
         final_mask[y0:y1, x0:x1] |= chosen
         report["roi_results"].append({
             "name": name, "bounds_xyxy": b, "roi_pixels": int(model_mask.size),
             "model_brow_pixels": model_count,
             "model_brow_fraction": round(float(model_count / max(1, model_mask.size)), 4),
             "model_mask_accepted_by_app_gate": bool(used_model),
-            "selected_method": "EasyPortrait class 2/3" if used_model else "adaptive contrast fallback",
+            "selected_method": (
+                "EasyPortrait class 2/3" if used_model else
+                ("adaptive contrast fallback" if candidate_accepted else "manual correction required (area gate rejected candidate)")
+            ),
+            "candidate_mask_pixels": candidate_count,
+            "candidate_mask_fraction": round(float(candidate_count / max(1, candidate.size)), 4),
+            "final_mask_accepted_by_area_gate": bool(candidate_accepted),
             "final_mask_pixels": int(chosen.sum()),
             "final_mask_fraction": round(float(chosen.mean()), 4),
         })
@@ -233,6 +244,9 @@ def run_case(image_path: Path, case_name: str, landmarker, session, out_dir: Pat
     )
     report["model_mask_accepted_regions"] = int(model_accepted_regions)
     report["model_brow_rois_pass"] = bool(model_accepted_regions == 2)
+    rejected_regions = sum(not item["final_mask_accepted_by_area_gate"] for item in report["roi_results"])
+    report["auto_mask_rejected_regions"] = int(rejected_regions)
+    report["needs_manual_review"] = bool(rejected_regions > 0 or model_accepted_regions < 2)
 
     overlay = image.copy()
     green = np.zeros_like(overlay)
