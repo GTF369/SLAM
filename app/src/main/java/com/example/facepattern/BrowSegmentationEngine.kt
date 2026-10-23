@@ -209,6 +209,7 @@ internal object BrowSegmentationEngine {
             val acceptedMask = isPlausibleBrowMask(candidateCount, candidateMask.size)
             if (!acceptedMask) rejectedRegions++
             val mask = if (acceptedMask) candidateMask else BooleanArray(candidateMask.size)
+            val count = if (acceptedMask) candidateCount else 0
             val ratio = if (acceptedMask) candidateRatio else 0f
             val localQuality = when {
                 !acceptedMask -> 0.15f
