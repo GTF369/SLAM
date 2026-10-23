@@ -1292,8 +1292,13 @@ class MainActivity : AppCompatActivity() {
         if (!usePopulationAestheticPrior) return
         val sessionSnapshot = currentDesignSessionId
         val pointSnapshot = points.map { PointF(it.x, it.y) }
+        val sourceWidth = capturedPhoto?.width?.toFloat() ?: return
+        val sourceHeight = capturedPhoto?.height?.toFloat() ?: return
+        // A 768px longest edge is enough for the 224px rating model and avoids three
+        // simultaneous full-resolution RGBA buffers on memory-constrained phones.
         val rendered = ranked.mapNotNull { recommendation ->
-            browView.renderCandidateBitmap(recommendation.params)?.let { recommendation to it }
+            browView.renderCandidateBitmap(recommendation.params, maxDimension = 768)
+                ?.let { recommendation to it }
         }
         if (rendered.size != ranked.size) {
             rendered.forEach { (_, bitmap) -> if (!bitmap.isRecycled) bitmap.recycle() }
@@ -1304,7 +1309,10 @@ class MainActivity : AppCompatActivity() {
         Thread({
             val scored = rendered.mapNotNull { (recommendation, bitmap) ->
                 try {
-                    val rating = BrowAestheticPrior.score(applicationContext, bitmap, pointSnapshot)
+                    val scaleX = bitmap.width.toFloat() / sourceWidth
+                    val scaleY = bitmap.height.toFloat() / sourceHeight
+                    val modelPoints = pointSnapshot.map { PointF(it.x * scaleX, it.y * scaleY) }
+                    val rating = BrowAestheticPrior.score(applicationContext, bitmap, modelPoints)
                     rating?.let {
                         recommendation.copy(
                             score = (it / 5f * 100f).roundToInt().coerceIn(0, 100),
@@ -4822,24 +4830,32 @@ internal class BrowDesignView(context: Context) : View(context) {
         invalidate()
     }
 
-    /** Render an independent full-resolution face image with a candidate brow overlay. */
-    fun renderCandidateBitmap(candidateParams: BrowParams): Bitmap? {
+    /**
+     * Render a bounded-size candidate for aesthetic inference. The original photo and
+     * editable design stay full resolution for precise drawing and printing.
+     */
+    fun renderCandidateBitmap(candidateParams: BrowParams, maxDimension: Int = 768): Bitmap? {
         val image = photo ?: return null
-        if (image.isRecycled || points.size < 455) return null
+        if (image.isRecycled || points.size < 455 || maxDimension < 224) return null
         return try {
-            val rendered = Bitmap.createBitmap(image.width, image.height, Bitmap.Config.ARGB_8888)
+            val imageScale = min(1f, maxDimension.toFloat() /
+                max(image.width, image.height).coerceAtLeast(1).toFloat())
+            val outputWidth = max(1, (image.width * imageScale).roundToInt())
+            val outputHeight = max(1, (image.height * imageScale).roundToInt())
+            val rendered = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
             val candidateCanvas = Canvas(rendered)
             candidateCanvas.drawBitmap(
-                image, 0f, 0f,
+                image, null, RectF(0f, 0f, outputWidth.toFloat(), outputHeight.toFloat()),
                 Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
             )
             if (useNativeShape && nativeContours.isNotEmpty()) {
                 BrowRenderer.drawNativeContours(
                     candidateCanvas, nativeContours, points, candidateParams,
-                    scale = 1f, imageLeft = 0f, imageTop = 0f
+                    scale = imageScale, imageLeft = 0f, imageTop = 0f
                 )
             } else {
-                BrowRenderer.drawBrows(candidateCanvas, points, candidateParams)
+                val scaledPoints = points.map { PointF(it.x * imageScale, it.y * imageScale) }
+                BrowRenderer.drawBrows(candidateCanvas, scaledPoints, candidateParams)
             }
             rendered
         } catch (_: Exception) {
