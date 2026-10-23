@@ -1201,10 +1201,10 @@ class MainActivity : AppCompatActivity() {
         recommendationLabel.text = BrowRecommendationEngine.sourceLabel(this)
         ranked.forEach { recommendation ->
             val button = Button(this).apply {
-                text = if (BrowRecommendationEngine.hasApprovedModel(this@MainActivity) && recommendation.probability != null) {
-                    "${recommendation.name}\n偏好估计 ${String.format(java.util.Locale.getDefault(), "%.1f", recommendation.probability * 100f)}%"
-                } else {
-                    "${recommendation.name}\n规则参考分 ${recommendation.score}"
+                text = when (recommendation.probabilityType) {
+                    "conditional_choice" -> "${recommendation.name}\n本组选择概率 ${String.format(java.util.Locale.getDefault(), "%.1f", (recommendation.probability ?: 0f) * 100f)}%"
+                    "high_rating" -> "${recommendation.name}\n获得 4–5 分概率 ${String.format(java.util.Locale.getDefault(), "%.1f", (recommendation.probability ?: 0f) * 100f)}%"
+                    else -> "${recommendation.name}\n规则参考分 ${recommendation.score}"
                 }
                 textSize = 11f
                 minHeight = dp(52)
@@ -4136,14 +4136,17 @@ private object BrowRecommendationEngine {
         }
     }
 
-    fun hasApprovedModel(context: Context): Boolean = loadModel(context) != null
+    fun hasApprovedModel(context: Context): Boolean =
+        loadChoiceModel(context) != null || loadModel(context) != null
 
-    fun sourceLabel(context: Context): String =
-        if (loadModel(context) != null) {
-            "已启用经过独立顾客集校准、验证并完成人工审核的偏好估计模型。分数表示顾客给出 4–5 分评价的估计倾向，不代表客观审美或治疗效果保证。"
-        } else {
-            "当前使用几何规则参考分，并非 AI 概率。偏好模型只有经过独立校准、外部顾客验证和人工审核后才会启用。"
-        }
+    fun sourceLabel(context: Context): String = when {
+        loadChoiceModel(context) != null ->
+            "已启用经过独立顾客集校准、外部验证和人工审核的条件选择模型。概率表示顾客在本次展示的自然款、柔和款和立体款三项中选择各候选的估计概率，三项合计为 100%。它不是客观审美概率，也不保证治疗结果。"
+        loadModel(context) != null ->
+            "已启用经过独立顾客集校准、外部验证和人工审核的高分模型。百分比表示候选获得 4–5 分评价的估计概率，各候选概率不要求合计为 100%。"
+        else ->
+            "当前使用几何规则参考分，并非 AI 概率。只有经过真实顾客偏好数据训练、独立校准验证并完成人工审核的模型才会显示概率。"
+    }
 
     fun rank(
         context: Context,
@@ -4158,6 +4161,10 @@ private object BrowRecommendationEngine {
             BrowRecommendation("柔和款", 78, BrowParams(0.82f, 0.94f, 0.72f, 1), "柔和款：较低粗细与弧度的参数预设"),
             BrowRecommendation("立体款", 76, BrowParams(1.18f, 1.06f, 1.22f, 2), "立体款：较高粗细与弧度的参数预设")
         )
+        val choiceModel = loadChoiceModel(context)
+        if (choiceModel != null) {
+            return rankWithChoiceModel(features, templates, choiceModel)
+        }
         val model = loadModel(context)
         if (model != null) {
             // Search a small, bounded parameter grid within each style family. This
@@ -4198,7 +4205,8 @@ private object BrowRecommendationEngine {
                                     score = (preference * 100f).roundToInt().coerceIn(0, 100),
                                     params = candidateParams,
                                     reason = "${family.name}：参数组合经已审核的顾客偏好模型排序，仍需顾客和纹绣师确认",
-                                    probability = preference
+                                    probability = preference,
+                                    probabilityType = "high_rating"
                                 )
                             )
                         }
@@ -4214,6 +4222,115 @@ private object BrowRecommendationEngine {
             templates[1].copy(score = (78f + (if (shapeSignal < 0f) -shapeSignal * 6f else -shapeSignal * 2f) - penalty * 0.6f).roundToInt().coerceIn(60, 95)),
             templates[2].copy(score = (76f + (if (shapeSignal > 0f) shapeSignal * 7f else shapeSignal * 2f) - penalty * 0.4f).roundToInt().coerceIn(60, 95))
         ).sortedByDescending { it.score }
+    }
+
+    private fun candidateFeatures(features: BrowFaceMeasurements, candidateParams: BrowParams): FloatArray =
+        floatArrayOf(
+            features.widthHeightRatio,
+            features.interocularFaceWidthRatio,
+            features.jawFaceWidthRatio,
+            features.browEyeDistanceRatio,
+            features.browAsymmetryRatio,
+            features.eyeLineTilt,
+            candidateParams.thickness,
+            candidateParams.length,
+            candidateParams.arch,
+            if (candidateParams.style == 1) 1f else 0f,
+            if (candidateParams.style == 2) 1f else 0f,
+            features.nativeBrowAreaFraction,
+            features.nativeBrowSideImbalance,
+            features.nativeBrowMaskAvailable,
+            features.nativeShapeMode
+        )
+
+    private fun rankWithChoiceModel(
+        features: BrowFaceMeasurements,
+        templates: List<BrowRecommendation>,
+        model: TrainedChoiceModel
+    ): List<BrowRecommendation> {
+        val logits = FloatArray(templates.size) { index ->
+            BrowChoiceFeatureBuilder.utility(
+                candidateFeatures(features, templates[index].params),
+                model.means,
+                model.scales,
+                model.coefficients
+            )
+        }
+        val probabilities = BrowChoiceFeatureBuilder.probabilities(logits, model.temperature)
+        return templates.mapIndexed { index, candidate ->
+            candidate.copy(
+                score = (probabilities[index] * 100f).roundToInt().coerceIn(0, 100),
+                reason = "经独立校准的条件选择模型估计了顾客在当前三款候选中选择此方案的概率，仍需顾客和纹绣师确认。",
+                probability = probabilities[index],
+                probabilityType = "conditional_choice",
+                choiceLogit = logits[index]
+            )
+        }.sortedByDescending { it.probability ?: 0f }
+    }
+
+    private fun loadChoiceModel(context: Context): TrainedChoiceModel? {
+        if (choiceLoadAttempted) return trainedChoiceModel
+        choiceLoadAttempted = true
+        return try {
+            val json = context.assets.open("brow_choice_ranker.json")
+                .bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val root = org.json.JSONObject(json)
+            if (root.optInt("model_version", -1) != 1 ||
+                root.optString("model_type") != "conditional_choice" ||
+                !root.optBoolean("release_approved", false) ||
+                root.optString("calibration_status") != "temperature_scaling") return null
+            val external = root.optJSONObject("external_validation") ?: return null
+            val gates = external.optJSONObject("release_gates") ?: return null
+            val requiredGates = listOf(
+                "external_cases_at_least_100",
+                "external_sessions_at_least_100",
+                "top1_accuracy_at_least_0_40",
+                "top1_gain_ci_lower_above_zero",
+                "multiclass_brier_better_than_uniform",
+                "ece_at_most_0_10",
+                "nll_better_than_uniform"
+            )
+            if (requiredGates.any { !gates.optBoolean(it, false) } ||
+                !external.optBoolean("passed_release_gates", false) ||
+                external.optInt("n_cases", 0) < 100 ||
+                external.optInt("n_sessions", 0) < 100 ||
+                external.optDouble("top1_accuracy", 0.0) < 0.40 ||
+                external.optDouble("multiclass_brier_score", Double.POSITIVE_INFINITY) >=
+                    external.optDouble("uniform_choice_brier_baseline", 2.0 / 3.0) ||
+                external.optDouble("expected_calibration_error_10_bins", Double.POSITIVE_INFINITY) > 0.10 ||
+                external.optDouble("mean_negative_log_likelihood", Double.POSITIVE_INFINITY) >= kotlin.math.ln(3.0)) {
+                return null
+            }
+            val bootstrap = external.optJSONObject("customer_cluster_bootstrap") ?: return null
+            if (bootstrap.optDouble("top1_gain_ci95_low", Double.NEGATIVE_INFINITY) <= 0.0) return null
+
+            val expectedFeatureOrder = BrowChoiceFeatureBuilder.featureOrder
+            val featureOrder = root.optJSONArray("feature_order") ?: return null
+            if (featureOrder.length() != expectedFeatureOrder.size) return null
+            for (index in expectedFeatureOrder.indices) {
+                if (featureOrder.optString(index) != expectedFeatureOrder[index]) return null
+            }
+            val meansJson = root.getJSONArray("means")
+            val scalesJson = root.getJSONArray("scales")
+            val coefficientsJson = root.getJSONArray("coefficients")
+            if (meansJson.length() != expectedFeatureOrder.size ||
+                scalesJson.length() != expectedFeatureOrder.size ||
+                coefficientsJson.length() != expectedFeatureOrder.size) return null
+            val means = FloatArray(expectedFeatureOrder.size) { meansJson.getDouble(it).toFloat() }
+            val scales = FloatArray(expectedFeatureOrder.size) {
+                scalesJson.getDouble(it).toFloat().let { scale -> if (abs(scale) < 1e-8f) 1f else scale }
+            }
+            val coefficients = FloatArray(expectedFeatureOrder.size) { coefficientsJson.getDouble(it).toFloat() }
+            val temperature = root.getDouble("temperature").toFloat()
+            if (!temperature.isFinite() || temperature <= 0f ||
+                !means.all { it.isFinite() } ||
+                !scales.all { it.isFinite() && it > 0f } ||
+                !coefficients.all { it.isFinite() }) return null
+            trainedChoiceModel = TrainedChoiceModel(means, scales, coefficients, temperature)
+            trainedChoiceModel
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun loadModel(context: Context): TrainedModel? {

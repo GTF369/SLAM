@@ -87,4 +87,44 @@ internal object BrowChoiceFeatureBuilder {
         )
         return base + interactions
     }
+
+    fun utility(
+        base: FloatArray,
+        means: FloatArray,
+        scales: FloatArray,
+        coefficients: FloatArray
+    ): Float {
+        val expanded = expand(base)
+        require(means.size == expanded.size && scales.size == expanded.size &&
+            coefficients.size == expanded.size) {
+            "Conditional-choice model arrays must match the 35-feature schema"
+        }
+        var total = 0.0
+        for (index in expanded.indices) {
+            require(means[index].isFinite() && scales[index].isFinite() &&
+                scales[index] > 0f && coefficients[index].isFinite()) {
+                "Conditional-choice model contains invalid parameters"
+            }
+            total += coefficients[index].toDouble() *
+                ((expanded[index] - means[index]) / scales[index]).toDouble()
+        }
+        require(total.isFinite()) { "Conditional-choice utility is not finite" }
+        return total.toFloat()
+    }
+
+    fun probabilities(logits: FloatArray, temperature: Float): FloatArray {
+        require(logits.size >= 2 && logits.all { it.isFinite() }) {
+            "Conditional-choice logits must contain at least two finite values"
+        }
+        require(temperature.isFinite() && temperature > 0f) {
+            "Conditional-choice temperature must be positive and finite"
+        }
+        val maximum = logits.maxOrNull() ?: throw IllegalArgumentException("No candidate logits")
+        val exponentials = DoubleArray(logits.size) {
+            kotlin.math.exp(((logits[it] - maximum) / temperature).toDouble())
+        }
+        val total = exponentials.sum()
+        require(total.isFinite() && total > 0.0) { "Could not normalize choice probabilities" }
+        return FloatArray(logits.size) { (exponentials[it] / total).toFloat() }
+    }
 }

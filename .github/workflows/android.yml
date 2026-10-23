@@ -165,8 +165,10 @@ jobs:
         run: python -m compileall -q ml
       - name: Test curvature statistics, ranker gates, and synthetic geometry
         run: python -m unittest discover -s ml/tests -v
-      - name: Run synthetic preference probability calibration sandbox
+      - name: Run synthetic high-rating probability calibration sandbox
         run: python ml/simulate_brow_ranker_sandbox.py --output /tmp/brow-ranker-sandbox-report.json
+      - name: Run synthetic conditional-choice probability sandbox
+        run: python ml/simulate_brow_choice_sandbox.py --output /tmp/brow-choice-sandbox-report.json
       - name: Run synthetic 3D surface compensation sandbox
         run: python ml/simulate_surface_compensation.py --output /tmp/surface-compensation-sandbox-report.json
       - name: Upload synthetic model and geometry reports
@@ -175,6 +177,7 @@ jobs:
           name: brow-sandbox-model-validation
           path: |
             /tmp/brow-ranker-sandbox-report.json
+            /tmp/brow-choice-sandbox-report.json
             /tmp/surface-compensation-sandbox-report.json
           if-no-files-found: error
           retention-days: 14

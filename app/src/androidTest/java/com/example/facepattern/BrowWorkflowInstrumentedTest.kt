@@ -158,6 +158,32 @@ class BrowWorkflowInstrumentedTest {
     }
 
     @Test
+    fun conditionalChoiceProbabilitiesAreNormalizedAndTemperatureCalibrated() {
+        val base = FloatArray(15) { (it + 1) / 20f }
+        val expanded = BrowChoiceFeatureBuilder.expand(base)
+        assertEquals("Model feature schema must have 35 entries", 35, expanded.size)
+
+        val coefficients = FloatArray(35)
+        coefficients[15] = 1f // face width/height x thickness interaction
+        val utility = BrowChoiceFeatureBuilder.utility(
+            base, FloatArray(35), FloatArray(35) { 1f }, coefficients
+        )
+        assertEquals("Interaction utility must match the Python feature schema",
+            base[0] * base[6], utility, 1e-6f)
+
+        val probabilities = BrowChoiceFeatureBuilder.probabilities(floatArrayOf(0f, 1f, -1f), 1f)
+        assertEquals("Probabilities must sum to one", 1.0, probabilities.sum().toDouble(), 1e-6)
+        assertTrue("Higher utility should have higher choice probability", probabilities[1] > probabilities[0])
+        assertTrue("Middle utility should outrank the lowest utility", probabilities[0] > probabilities[2])
+        assertTrue("Probability values must stay in [0,1]",
+            probabilities.all { it.isFinite() && it in 0f..1f })
+
+        val smoother = BrowChoiceFeatureBuilder.probabilities(floatArrayOf(0f, 1f, -1f), 2f)
+        assertTrue("Higher temperature should soften the maximum probability",
+            smoother.maxOrNull()!! < probabilities.maxOrNull()!!)
+    }
+
+    @Test
     fun launchWithoutCameraShowsPhotoImportAndLocalCaseLibrary() {
         launch(syntheticDesign = false)
         assertNotNull(device.findObject(By.text("拍照设计")))

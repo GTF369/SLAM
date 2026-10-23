@@ -146,3 +146,24 @@ No customer-specific segmentation model is shipped without a consented, professi
 - Measured 3D/physical reference and stencil-transfer validation by region.
 - OPPO Find X7 and each target printer tested in person, including 20 mm scale accuracy, no auto-fit setting, page margins, orientation and cancellation.
 - Device performance/crash review, privacy-policy review, third-party license review and a signed release build.
+
+
+## Conditional choice probabilities for the three displayed candidates
+
+The Android recommender first looks for a reviewed `brow_choice_ranker.json`. If present and every validation gate is satisfied, it displays conditional-choice probabilities for the three current options (natural, soft, defined). The three probabilities are normalized together and sum to 100%. They answer “which of these three options is the customer estimated to choose in this choice session?”, not “what is the objective probability that this brow is beautiful?” or “will the treatment succeed?”. If no eligible choice model exists, the application falls back to the explicit geometry-rule scores or, when separately approved, the binary probability of receiving a 4–5 rating.
+
+Train the conditional-choice candidate from consented feedback exports with disjoint customer sets:
+
+```bash
+python ml/train_brow_choice_ranker.py development.csv \
+  --calibration-csv calibration.csv \
+  --external-validation-csv external_validation.csv \
+  --mark-reviewed-after-human-review \
+  --output app/src/main/assets/brow_choice_ranker.json
+```
+
+Each session must contain exactly one natural, one soft and one defined row with exactly one final selection. Development, temperature-calibration and external-validation customer IDs must be disjoint. The Android loader additionally requires the trained model to be explicitly marked reviewed and to pass the customer-cluster Top-1 gain interval, Top-1 accuracy, multiclass Brier, negative log-likelihood and calibration-error gates. Synthetic sandbox reports are not eligible data and must never be copied to the app assets. The current repository has no real customer training cohort, so a fresh install will not claim calibrated conditional-choice probabilities until such a model is properly trained and reviewed.
+
+The CI synthetic conditional-choice sandbox uses generated customers and a known probability generator to check feature order, optimization, temperature scaling and probability normalization. It is not evidence of real-salon performance. The Android probability feature-vector and surface-compensation tests separately verify implementation consistency.
+
+For 2D-to-surface length compensation, the application uses the measured surface arc for each of eight matching brow regions and its projected photo segment calibrated by the measured interpupillary distance. Incomplete measurements or factors outside 0.75–1.60 are rejected. The synthetic 3D pinhole experiment checks numerical consistency on a known surface only. Actual transfer accuracy still requires independent surface measurements, OPPO-device testing and a physical print/transfer study.
