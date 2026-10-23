@@ -187,10 +187,8 @@ def build_choice_sessions(rows: list[dict[str, str]], source: str = "CSV") -> li
             feature_row(row, source=source, row_num=row_num)
             for row, row_num in sorted_records
         ])
-        selected_style = next(
-            row["style"].strip().lower()
-            for row, _ in records if parse_selected(row.get("selected", ""), source=source, row_num=2)
-        )
+        selected_row = records[selected_indices[0]][0]
+        selected_style = selected_row["style"].strip().lower()
         selected_index = style_order[selected_style]
         sessions.append({
             "session_id": session_id,
