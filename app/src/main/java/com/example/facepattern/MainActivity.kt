@@ -3618,55 +3618,7 @@ class MainActivity : AppCompatActivity() {
         return factors
     }
 
-    /**
-     * Uses MediaPipe's relative z estimate only as a rough local arc-length proxy.
-     * It is NOT metric skin-surface length and must remain opt-in until compared with
-     * physical measurements. Values are clamped to limit the influence of noisy z.
-     */
-    private fun estimateDepthBasedCurvatureFactors(
-        points: List<PointF>,
-        depths: List<Float>
-    ): Map<String, Float> {
-        if (points.size < 455 || depths.size != points.size ||
-            depths.any { !it.isFinite() }) return emptyMap()
-        val noseX = points.getOrNull(1)?.x ?: return emptyMap()
-        val browLandmarkSets = listOf(
-            intArrayOf(70, 63, 105, 66, 107),
-            intArrayOf(300, 293, 334, 296, 336)
-        )
-        val factors = linkedMapOf<String, Float>()
-        for (ids in browLandmarkSets) {
-            val usable = ids.filter { it in points.indices && it in depths.indices }
-                .filter { points[it].x.isFinite() && points[it].y.isFinite() }
-                .sortedBy { points[it].x }
-            if (usable.size != ids.size) continue
-            val sideCenter = usable.map { points[it].x }.average().toFloat()
-            val anatomicalRight = sideCenter < noseX
-            val names = if (anatomicalRight) {
-                listOf("右眉尾", "右眉峰", "右眉身", "右眉头")
-            } else {
-                listOf("左眉头", "左眉身", "左眉峰", "左眉尾")
-            }
-            for (i in 0 until usable.lastIndex) {
-                val a = usable[i]
-                val b = usable[i + 1]
-                val dx = points[b].x - points[a].x
-                val dy = points[b].y - points[a].y
-                val dz = depths[b] - depths[a]
-                val planar = hypot(dx.toDouble(), dy.toDouble()).toFloat()
-                val spatial = hypot(planar.toDouble(), dz.toDouble()).toFloat()
-                val factor = if (planar > 0.5f && spatial.isFinite()) {
-                    (spatial / planar).coerceIn(0.75f, 1.6f)
-                } else {
-                    1f
-                }
-                factors[names[i]] = factor
-            }
-        }
-        return factors
-    }
-
-    private fun printProfileSlug(raw: String): String = raw.trim().lowercase()
+    // No single-image relative-z estimator participates in physical print geometry.\n\n    private fun printProfileSlug(raw: String): String = raw.trim().lowercase()
         .map { if (it.isLetterOrDigit()) it else '_' }
         .joinToString("")
         .replace(Regex("_+"), "_")
@@ -4836,24 +4788,38 @@ private object BrowRenderer {
             } else {
                 listOf("左眉头", "左眉身", "左眉峰", "左眉尾")
             }
-            val cumulative = FloatArray(width)
-            cumulative[0] = 0f
+            val originalCenterYs = FloatArray(width) { i ->
+                (contour.top[i] + contour.bottom[i]) / 2f
+            }
+            val cumulativeX = FloatArray(width)
+            val cumulativeY = FloatArray(width)
+            cumulativeX[0] = 0f
+            cumulativeY[0] = originalCenterYs[0]
             for (i in 1 until width) {
                 val t = (i - 0.5f) / (width - 1).coerceAtLeast(1)
                 val segment = min(3, (t * 4f).toInt())
                 val factor = (curvatureFactors[segmentNames[segment]] ?: 1f).coerceIn(0.75f, 1.6f)
-                cumulative[i] = cumulative[i - 1] + factor
+                // Scale both tangent components along the reviewed brow centreline.
+                // Scaling only x is incorrect for sloped or asymmetric native brows.
+                cumulativeX[i] = cumulativeX[i - 1] + factor
+                cumulativeY[i] = cumulativeY[i - 1] + (originalCenterYs[i] - originalCenterYs[i - 1]) * factor
             }
-            val cumulativeCenter = (cumulative.first() + cumulative.last()) / 2f
-            val displaySpan = max(1f, cumulative.last() * params.length)
+            val cumulativeCenterX = (cumulativeX.first() + cumulativeX.last()) / 2f
+            val cumulativeCenterY = (cumulativeY.first() + cumulativeY.last()) / 2f
+            val originalCenterY = (originalCenterYs.first() + originalCenterYs.last()) / 2f
+            val centerlineSpan = kotlin.math.hypot(
+                (cumulativeX.last() - cumulativeX.first()).toDouble(),
+                (cumulativeY.last() - cumulativeY.first()).toDouble()
+            ).toFloat()
+            val displaySpan = max(1f, centerlineSpan * params.length)
             val topPathPoints = ArrayList<PointF>(width)
             val bottomPathPoints = ArrayList<PointF>(width)
             for (i in 0 until width) {
                 val t = i.toFloat() / (width - 1).coerceAtLeast(1)
-                val x = imageCenterX + (cumulative[i] - cumulativeCenter) * params.length
+                val x = imageCenterX + (cumulativeX[i] - cumulativeCenterX) * params.length
                 val upper = contour.top[i]
                 val lower = contour.bottom[i]
-                val centerY = (upper + lower) / 2f
+                val centerY = cumulativeY[i] - cumulativeCenterY + originalCenterY
                 val halfThickness = max(0.7f, abs(lower - upper) * 0.5f * params.thickness)
                 val archDelta = displaySpan * 0.075f * (params.arch - 1f) * 4f * t * (1f - t)
                 val xOnCanvas = imageLeft + x * scale
@@ -4966,7 +4932,7 @@ private object BrowRenderer {
         val landmarkPoints = browSets.flatMap { ids -> ids.map { index -> points.getOrNull(index) }.filterNotNull() }
         if (landmarkPoints.isEmpty()) return null
         val faceWidth = if (points.size > 454) abs(points[454].x - points[234].x) else width * 0.35f
-        val maxCorrection = curvatureFactors.values.maxOrNull()?.coerceIn(0.75f, 1.6f) ?: 1f
+        val maxCorrection = (curvatureFactors.values.maxOfOrNull { abs(it - 1f) }?.plus(1f) ?: 1f).coerceIn(1f, 1.6f)
         val marginX = max(8f, faceWidth * (0.06f + (maxCorrection - 1f) * 0.08f))
         val marginY = max(8f, faceWidth * 0.11f)
 
@@ -5015,7 +4981,7 @@ private object BrowRenderer {
         val browPoints = browSets.flatMap { ids -> ids.map { index -> points.getOrNull(index) }.filterNotNull() }
         if (browPoints.isEmpty()) return null
         val faceWidth = if (points.size > 454) abs(points[454].x - points[234].x) else width * 0.35f
-        val maxCorrection = curvatureFactors.values.maxOrNull()?.coerceIn(0.75f, 1.6f) ?: 1f
+        val maxCorrection = (curvatureFactors.values.maxOfOrNull { abs(it - 1f) }?.plus(1f) ?: 1f).coerceIn(1f, 1.6f)
         val marginX = max(8f, faceWidth * (0.06f + (maxCorrection - 1f) * 0.9f))
         val marginY = max(8f, faceWidth * 0.11f)
         val left = (browPoints.minOf { it.x } - marginX).toInt().coerceIn(0, width - 1)
