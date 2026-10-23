@@ -87,9 +87,10 @@ class BrowWorkflowInstrumentedTest {
     @Test
     fun browMaskAreaGateRejectsEmptyAndOversizedContours() {
         assertTrue("A normal 10% brow ROI mask should be accepted", isPlausibleBrowMask(100, 1000))
-        assertTrue("The lower 0.5% boundary should be accepted", isPlausibleBrowMask(5, 1000))
+        assertTrue("The lower 2% boundary should be accepted", isPlausibleBrowMask(20, 1000))
         assertTrue("The upper 28% boundary should be accepted", isPlausibleBrowMask(280, 1000))
         assertFalse("An empty contour must be rejected", isPlausibleBrowMask(0, 1000))
+        assertFalse("A 0.98% speck must not be treated as an eyebrow", isPlausibleBrowMask(64, 6534))
         assertFalse("A 33% dark patch must not be treated as an eyebrow", isPlausibleBrowMask(333, 1000))
         assertFalse("Invalid region size must be rejected", isPlausibleBrowMask(0, 0))
     }
