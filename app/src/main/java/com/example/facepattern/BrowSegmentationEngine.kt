@@ -196,7 +196,7 @@ internal object BrowSegmentationEngine {
             // that candidate is also implausible. A broad dark patch must never be treated
             // as an eyebrow mask merely because the heuristic found pixels.
             val useModelMask = modelMask != null &&
-                modelPixels >= max(5, (modelMask.size * 0.005f).toInt()) &&
+                modelPixels >= max(5, (modelMask.size * 0.02f).toInt()) &&
                 isPlausibleBrowMask(modelPixels, modelMask.size)
             val candidateMask = if (useModelMask) {
                 modelAppliedRegions++
