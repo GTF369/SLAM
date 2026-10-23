@@ -4794,16 +4794,31 @@ private object BrowRenderer {
             val originalCenterYs = FloatArray(width) { i ->
                 (contour.top[i] + contour.bottom[i]) / 2f
             }
+            val browLandmarkIds = if (anatomicalRight) {
+                intArrayOf(300, 293, 334, 296, 336)
+            } else {
+                intArrayOf(70, 63, 105, 66, 107)
+            }
+            val sortedLandmarkX = browLandmarkIds.mapNotNull { landmarks.getOrNull(it)?.x }.sorted()
             val cumulativeX = FloatArray(width)
             val cumulativeY = FloatArray(width)
             cumulativeX[0] = 0f
             cumulativeY[0] = originalCenterYs[0]
             for (i in 1 until width) {
-                val t = (i - 0.5f) / (width - 1).coerceAtLeast(1)
-                val segment = min(3, (t * 4f).toInt())
+                val sourceImageX = contour.xStart + i - 0.5f
+                val segment = if (sortedLandmarkX.size == 5) {
+                    when {
+                        sourceImageX < sortedLandmarkX[1] -> 0
+                        sourceImageX < sortedLandmarkX[2] -> 1
+                        sourceImageX < sortedLandmarkX[3] -> 2
+                        else -> 3
+                    }
+                } else {
+                    min(3, (((i - 0.5f) / (width - 1).coerceAtLeast(1)) * 4f).toInt())
+                }
                 val factor = (curvatureFactors[segmentNames[segment]] ?: 1f).coerceIn(0.75f, 1.6f)
-                // Scale both tangent components along the reviewed brow centreline.
-                // Scaling only x is incorrect for sloped or asymmetric native brows.
+                // Apply each region's factor between its matching landmark boundaries,
+                // and scale both tangent components along the reviewed brow centreline.
                 cumulativeX[i] = cumulativeX[i - 1] + factor
                 cumulativeY[i] = cumulativeY[i - 1] + (originalCenterYs[i] - originalCenterYs[i - 1]) * factor
             }
