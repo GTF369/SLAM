@@ -41,14 +41,14 @@ def make_synthetic_rows(case_count: int, prefix: str, seed: int) -> tuple[list[d
     ]
     for case_index in range(case_count):
         case_id = f"SYNTH-{prefix}-{case_index:04d}"
-        face_width_height = float(rng.normal(0.78, 0.075).clip(0.60, 0.98))
-        interocular = float(rng.normal(0.38, 0.045).clip(0.25, 0.52))
-        jaw_ratio = float(rng.normal(0.80, 0.10).clip(0.55, 1.02))
-        brow_eye = float(rng.normal(0.055, 0.018).clip(0.015, 0.12))
-        asymmetry = float(rng.gamma(1.6, 0.012).clip(0.0, 0.09))
-        eye_tilt = float(rng.normal(0.0, 0.06).clip(-0.18, 0.18))
-        native_area = float(rng.normal(0.12, 0.045).clip(0.01, 0.28))
-        side_imbalance = float(rng.normal(0.04, 0.025).clip(0.0, 0.18))
+        face_width_height = float(np.clip(rng.normal(0.78, 0.075), 0.60, 0.98))
+        interocular = float(np.clip(rng.normal(0.38, 0.045), 0.25, 0.52))
+        jaw_ratio = float(np.clip(rng.normal(0.80, 0.10), 0.55, 1.02))
+        brow_eye = float(np.clip(rng.normal(0.055, 0.018), 0.015, 0.12))
+        asymmetry = float(np.clip(rng.gamma(1.6, 0.012), 0.0, 0.09))
+        eye_tilt = float(np.clip(rng.normal(0.0, 0.06), -0.18, 0.18))
+        native_area = float(np.clip(rng.normal(0.12, 0.045), 0.01, 0.28))
+        side_imbalance = float(np.clip(rng.normal(0.04, 0.025), 0.0, 0.18))
         mask_available = float(rng.random() < 0.82)
         native_shape_mode = float(rng.random() < 0.45)
         customer_noise = float(rng.normal(0.0, 0.25))
