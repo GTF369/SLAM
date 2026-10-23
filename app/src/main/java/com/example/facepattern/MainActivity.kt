@@ -1999,18 +1999,23 @@ class MainActivity : AppCompatActivity() {
             setText(currentCaseId)
             isEnabled = false
         }
-        val consent = CheckBox(this).apply {
-            text = "我已取得顾客同意，将匿名眉区测量值用于曲率研究和验证"
+        val localUseConsent = CheckBox(this).apply {
+            text = "我已取得顾客同意，将该测量值保存在本机，用于此顾客当前眉形设计与打印"
+            isChecked = false
+        }
+        val researchConsent = CheckBox(this).apply {
+            text = "另外同意将此测量值用于匿名跨顾客曲率统计与研究（可选）"
             isChecked = false
         }
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(8), dp(18), 0)
             addView(TextView(this@MainActivity).apply {
-                text = "用于研究眉区实测弧长与弦长关系。请使用柔性尺测量，照片像素不能代替毫米。局部圆弧半径仅为几何近似，不是三维面部重建。不同意数据研究时请取消。"
+                text = "测量记录保存在本机，用于当前顾客的分区打印补偿。请使用柔性尺测量，弧长与弦长必须对应同一段的端点，照片像素不能代替毫米。只有额外勾选研究授权后，该记录才纳入跨顾客 P10–P90 统计和曲率研究 CSV 导出。局部圆弧半径仅为几何近似，不是三维面部重建。"
                 textSize = 13f
             })
-            addView(consent)
+            addView(localUseConsent)
+            addView(researchConsent)
             addView(caseIdField)
             addView(region)
             addView(chord)
@@ -2039,6 +2044,7 @@ class MainActivity : AppCompatActivity() {
                     put("chord_mm", chordMm.toDouble())
                     put("factor", factor.toDouble())
                     put("estimated_radius_mm", estimatedRadiusMm?.toDouble() ?: org.json.JSONObject.NULL)
+                    put("research_consent", researchConsent.isChecked)
                     put("timestamp", System.currentTimeMillis())
                 }
                 old.put(item)
@@ -2047,6 +2053,7 @@ class MainActivity : AppCompatActivity() {
                 for (index in 0 until old.length()) {
                     val row = old.optJSONObject(index) ?: continue
                     if (row.optString("region") != region.selectedItem.toString()) continue
+                    if (!row.optBoolean("research_consent", true)) continue
                     val caseId = row.optString("case_id").trim()
                     val factorValue = row.optDouble("factor", Double.NaN)
                     if (caseId.isBlank() || !factorValue.isFinite() || factorValue !in 1.0..1.5708) continue
@@ -2074,8 +2081,10 @@ class MainActivity : AppCompatActivity() {
             .create().also { dialog ->
                 dialog.setOnShowListener {
                     val saveButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
-                    saveButton.isEnabled = consent.isChecked
-                    consent.setOnCheckedChangeListener { _, checked -> saveButton.isEnabled = checked }
+                    saveButton.isEnabled = localUseConsent.isChecked
+                    localUseConsent.setOnCheckedChangeListener { _, checked ->
+                        saveButton.isEnabled = checked
+                    }
                 }
                 dialog.show()
             }
@@ -2112,14 +2121,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun exportCurvatureCsv() {
         val records = org.json.JSONArray(getSharedPreferences("brow_curvature_samples", Context.MODE_PRIVATE).getString("records", "[]"))
-        if (records.length() == 0) {
-            Toast.makeText(this, "暂时没有曲率标定记录", Toast.LENGTH_SHORT).show()
+        val researchRecords = (0 until records.length())
+            .mapNotNull { records.optJSONObject(it) }
+            .filter { it.optBoolean("research_consent", true) }
+        if (researchRecords.isEmpty()) {
+            Toast.makeText(this, "暂无明确授权用于跨顾客研究的曲率记录", Toast.LENGTH_SHORT).show()
             return
         }
         val csv = buildString {
-            append("case_id,region,arc_mm,chord_mm,correction_factor,estimated_radius_mm,timestamp\n")
-            for (i in 0 until records.length()) {
-                val row = records.optJSONObject(i) ?: continue
+            append("case_id,region,arc_mm,chord_mm,correction_factor,estimated_radius_mm,timestamp,research_consent\n")
+            for (row in researchRecords) {
                 append(row.optString("case_id")).append(',')
                 append(row.optString("region")).append(',')
                 append(row.optDouble("arc_mm")).append(',')
@@ -2127,7 +2138,8 @@ class MainActivity : AppCompatActivity() {
                 val radius = row.optDouble("estimated_radius_mm", Double.NaN)
                 append(row.optDouble("factor")).append(',')
                 append(if (radius.isFinite()) radius else "").append(',')
-                append(row.optLong("timestamp")).append('\n')
+                append(row.optLong("timestamp")).append(',')
+                append(true).append('\n')
             }
         }
         val filename = "brow_curvature_calibration_${System.currentTimeMillis()}.csv"
