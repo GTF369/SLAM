@@ -8,10 +8,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
+
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
 
 from train_brow_ranker import build_matrix, calibration_metrics, fit_base_model, sigmoid
 
