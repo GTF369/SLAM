@@ -1199,8 +1199,8 @@ class MainActivity : AppCompatActivity() {
         recommendationLabel.text = BrowRecommendationEngine.sourceLabel(this)
         ranked.forEach { recommendation ->
             val button = Button(this).apply {
-                text = if (BrowRecommendationEngine.hasApprovedModel(this@MainActivity)) {
-                    "${recommendation.name}\n偏好估计 ${recommendation.score}%"
+                text = if (BrowRecommendationEngine.hasApprovedModel(this@MainActivity) && recommendation.probability != null) {
+                    "${recommendation.name}\n偏好估计 ${String.format(java.util.Locale.getDefault(), "%.1f", recommendation.probability * 100f)}%"
                 } else {
                     "${recommendation.name}\n规则参考分 ${recommendation.score}"
                 }
@@ -3994,7 +3994,9 @@ private data class BrowRecommendation(
     val name: String,
     val score: Int,
     val params: BrowParams,
-    val reason: String
+    val reason: String,
+    // Present only when a separately calibrated and reviewed preference model is loaded.
+    val probability: Float? = null
 )
 
 private data class BrowFaceMeasurements(
@@ -4172,14 +4174,15 @@ private object BrowRecommendationEngine {
                                     name = "${family.name}·自适应",
                                     score = (preference * 100f).roundToInt().coerceIn(0, 100),
                                     params = candidateParams,
-                                    reason = "${family.name}：参数组合经已审核的顾客偏好模型排序，仍需顾客和纹绣师确认"
+                                    reason = "${family.name}：参数组合经已审核的顾客偏好模型排序，仍需顾客和纹绣师确认",
+                                    probability = preference
                                 )
                             )
                         }
                     }
                 }
-                candidates.maxBy { it.score }
-            }.sortedByDescending { it.score }
+                candidates.maxBy { it.probability ?: it.score.toFloat() / 100f }
+            }.sortedByDescending { it.probability ?: it.score.toFloat() / 100f }
         }
         val shapeSignal = ((features.widthHeightRatio - 0.72f) / 0.18f).coerceIn(-1f, 1f)
         val penalty = (features.browAsymmetryRatio * 35f).coerceIn(0f, 5f)
