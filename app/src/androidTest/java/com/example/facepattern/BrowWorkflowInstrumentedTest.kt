@@ -156,7 +156,8 @@ class BrowWorkflowInstrumentedTest {
 
     @Test
     fun manualMaskStrokeSupportsUndoAndRedo() {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
         val photo = Bitmap.createBitmap(200, 200, Bitmap.Config.ARGB_8888)
         val overlay = Bitmap.createBitmap(120, 20, Bitmap.Config.ARGB_8888)
         val regions = listOf(
@@ -172,36 +173,58 @@ class BrowWorkflowInstrumentedTest {
             selectedPixelCount = 0,
             regions = regions,
         )
-        val view = BrowDesignView(context)
-        view.layout(0, 0, 200, 200)
-        view.setPhoto(photo)
-        view.setSegmentationResult(mask, visible = true)
-        view.setSegmentationEditMode(enabled = true, includePixels = true)
-
+        val values = IntArray(3)
+        val flags = BooleanArray(4)
         try {
-            assertEquals(0, Color.alpha(overlay.getPixel(20, 10)))
-            val start = SystemClock.uptimeMillis()
-            val down = MotionEvent.obtain(start, start, MotionEvent.ACTION_DOWN, 60f, 80f, 0)
-            val up = MotionEvent.obtain(start, start + 50, MotionEvent.ACTION_UP, 60f, 80f, 0)
-            try {
-                assertTrue(view.onTouchEvent(down))
-                assertTrue(view.onTouchEvent(up))
-            } finally {
-                down.recycle()
-                up.recycle()
-            }
+            instrumentation.runOnMainSync {
+                val view = BrowDesignView(context)
+                view.layout(0, 0, 200, 200)
+                view.setPhoto(photo)
+                view.setSegmentationResult(mask, visible = true)
+                view.setSegmentationEditMode(enabled = true, includePixels = true)
 
-            assertTrue("A manual stroke should add visible pixels", Color.alpha(overlay.getPixel(20, 10)) > 0)
-            assertTrue("The stroke should be undoable", view.canUndoMaskStroke())
-            assertTrue(view.undoLastMaskStroke())
-            assertEquals("Undo must restore the original transparent pixel", 0, Color.alpha(overlay.getPixel(20, 10)))
-            assertTrue("Undo should enable redo", view.canRedoMaskStroke())
-            assertTrue(view.redoLastMaskStroke())
-            assertTrue("Redo must restore the manual stroke", Color.alpha(overlay.getPixel(20, 10)) > 0)
+                values[0] = Color.alpha(overlay.getPixel(20, 10))
+                val eventTime = SystemClock.uptimeMillis()
+                val down = MotionEvent.obtain(
+                    eventTime, eventTime, MotionEvent.ACTION_DOWN, 60f, 80f, 0
+                )
+                val up = MotionEvent.obtain(
+                    eventTime, eventTime + 50, MotionEvent.ACTION_UP, 60f, 80f, 0
+                )
+                try {
+                    flags[0] = view.onTouchEvent(down)
+                    flags[1] = view.onTouchEvent(up)
+                } finally {
+                    down.recycle()
+                    up.recycle()
+                }
+
+                values[1] = Color.alpha(overlay.getPixel(20, 10))
+                flags[2] = view.canUndoMaskStroke()
+                flags[3] = view.undoLastMaskStroke()
+                values[2] = Color.alpha(overlay.getPixel(20, 10))
+                val canRedo = view.canRedoMaskStroke()
+                val redo = view.redoLastMaskStroke()
+                val afterRedo = Color.alpha(overlay.getPixel(20, 10))
+                view.setPhoto(null)
+                overlay.recycle()
+                photo.recycle()
+
+                assertEquals("Undo should be available after the stroke", true, flags[2])
+                assertTrue("The stroke should be undoable", flags[3])
+                assertEquals("Undo must restore transparency", 0, values[2])
+                assertTrue("Undo should enable redo", canRedo)
+                assertTrue("Redo should succeed", redo)
+                assertTrue("Redo must restore the stroke pixels", afterRedo > 0)
+            }
         } finally {
             if (!photo.isRecycled) photo.recycle()
             if (!overlay.isRecycled) overlay.recycle()
         }
+        assertEquals("Original overlay should start transparent", 0, values[0])
+        assertTrue("ACTION_DOWN must be handled", flags[0])
+        assertTrue("ACTION_UP must be handled", flags[1])
+        assertTrue("A manual stroke should add visible pixels", values[1] > 0)
     }
 
     @Test
