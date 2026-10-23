@@ -231,7 +231,14 @@ def synthetic_surface_case(
         "raw_projected_total_mm": raw_total_mm,
         "surface_arc_total_mm": target_total_mm,
         "compensated_total_mm": corrected_total_mm,
+        "raw_absolute_total_length_error_mm": abs(raw_total_mm - target_total_mm),
+        "compensated_absolute_total_length_error_mm": abs(corrected_total_mm - target_total_mm),
         "absolute_total_length_error_mm": abs(corrected_total_mm - target_total_mm),
+        "relative_total_error_reduction": (
+            1.0 - abs(corrected_total_mm - target_total_mm) / abs(raw_total_mm - target_total_mm)
+            if abs(raw_total_mm - target_total_mm) > 1e-12
+            else 0.0
+        ),
         "max_segment_error_mm": max(segment["absolute_error_mm"] for segment in segments),
         "endpoint_shift_px": endpoint_shift_px,
         "note": (
