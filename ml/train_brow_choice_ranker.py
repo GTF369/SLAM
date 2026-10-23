@@ -45,6 +45,14 @@ REQUIRED = {
     *FEATURE_COLUMNS,
 }
 EXPECTED_STYLES = {"natural", "soft", "defined"}
+DESIGN_INTENT_INDEX = {
+    "均衡自然": 0,
+    "偏柔和": 1,
+    "偏立体": 2,
+    "balanced_natural": 0,
+    "soft": 1,
+    "defined": 2,
+}
 REGULARIZATION = 0.02
 CHOICE_INTERACTION_NAMES = [
     "face_width_height_x_thickness",
@@ -67,15 +75,21 @@ CHOICE_INTERACTION_NAMES = [
     "native_brow_area_fraction_x_thickness",
     "native_brow_side_imbalance_x_thickness",
     "native_brow_side_imbalance_x_arch",
+    "design_intent_soft_x_style_soft",
+    "design_intent_soft_x_style_defined",
+    "design_intent_defined_x_style_soft",
+    "design_intent_defined_x_style_defined",
 ]
 CHOICE_FEATURE_NAMES = FEATURE_NAMES + CHOICE_INTERACTION_NAMES
 
 
-def expand_choice_features(base: np.ndarray) -> np.ndarray:
-    """Add face-by-candidate interactions so facial features do not cancel in softmax."""
+def expand_choice_features(base: np.ndarray, design_intent: int = 0) -> np.ndarray:
+    """Expand face/candidate features and interactions with the explicitly stated style intent."""
     values = np.asarray(base, dtype=np.float64)
     if values.shape != (len(FEATURE_NAMES),):
         raise ValueError(f"Expected {len(FEATURE_NAMES)} base features, got {values.shape}")
+    if design_intent not in (0, 1, 2):
+        raise ValueError("design_intent must be 0 (balanced), 1 (soft), or 2 (defined)")
     face_width, interocular, jaw, brow_eye, asymmetry, eye_tilt = values[:6]
     thickness, length, arch = values[6:9]
     style_soft, style_defined = values[9:11]
@@ -102,7 +116,15 @@ def expand_choice_features(base: np.ndarray) -> np.ndarray:
         side_imbalance * thickness,
         side_imbalance * arch,
     ], dtype=np.float64)
-    return np.concatenate((values, interactions))
+    intent_soft = 1.0 if design_intent == 1 else 0.0
+    intent_defined = 1.0 if design_intent == 2 else 0.0
+    intent_interactions = np.asarray([
+        intent_soft * style_soft,
+        intent_soft * style_defined,
+        intent_defined * style_soft,
+        intent_defined * style_defined,
+    ], dtype=np.float64)
+    return np.concatenate((values, interactions, intent_interactions))
 
 
 def parse_selected(raw: str, *, source: str, row_num: int) -> bool:
@@ -144,7 +166,16 @@ def feature_row(row: dict[str, str], *, source: str, row_num: int) -> np.ndarray
         raise ValueError(f"{source} row {row_num} has out-of-range mask fractions.")
     if values[13] not in (0.0, 1.0) or values[14] not in (0.0, 1.0):
         raise ValueError(f"{source} row {row_num} must use 0/1 for mask availability and native-shape mode.")
-    return expand_choice_features(np.asarray(values, dtype=np.float64))
+    raw_intent = (row.get("design_intent") or "均衡自然").strip()
+    if raw_intent not in DESIGN_INTENT_INDEX:
+        raise ValueError(
+            f"{source} row {row_num} has unknown design_intent {raw_intent!r}; "
+            "use 均衡自然, 偏柔和, or 偏立体."
+        )
+    return expand_choice_features(
+        np.asarray(values, dtype=np.float64),
+        design_intent=DESIGN_INTENT_INDEX[raw_intent],
+    )
 
 
 def build_choice_sessions(rows: list[dict[str, str]], source: str = "CSV") -> list[dict[str, Any]]:
@@ -417,7 +448,7 @@ def train_choice_model(
     external_report["release_gates"] = gates
     external_report["passed_release_gates"] = all(gates.values())
     return {
-        "model_version": 1,
+        "model_version": 2,
         "model_type": "conditional_choice",
         "feature_order": CHOICE_FEATURE_NAMES,
         "means": means.tolist(),

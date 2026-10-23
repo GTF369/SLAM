@@ -59,6 +59,10 @@ TRUE_WEIGHTS_BY_NAME = {
     "native_brow_area_fraction_x_thickness": 0.75,
     "native_brow_side_imbalance_x_thickness": -0.90,
     "native_brow_side_imbalance_x_arch": -1.35,
+    "design_intent_soft_x_style_soft": 0.55,
+    "design_intent_soft_x_style_defined": -0.35,
+    "design_intent_defined_x_style_soft": -0.30,
+    "design_intent_defined_x_style_defined": 0.65,
 }
 TRUE_WEIGHTS = np.asarray(
     [TRUE_WEIGHTS_BY_NAME.get(name, 0.0) for name in CHOICE_FEATURE_NAMES],
@@ -85,6 +89,8 @@ def make_synthetic_rows(
         side_imbalance = float(np.clip(rng.normal(0.04, 0.025), 0.0, 0.18))
         mask_available = float(rng.random() < 0.82)
         native_shape_mode = float(rng.random() < 0.45)
+        design_intent = int(rng.integers(0, 3))
+        design_intent_labels = ("均衡自然", "偏柔和", "偏立体")
         base_fields = {
             "case_id": case_id,
             "session_id": session_id,
@@ -98,6 +104,7 @@ def make_synthetic_rows(
             "native_brow_side_imbalance": f"{side_imbalance:.8f}",
             "native_brow_mask_available": f"{mask_available:.0f}",
             "native_shape_mode": f"{native_shape_mode:.0f}",
+            "design_intent": design_intent_labels[design_intent],
         }
         candidate_rows: list[dict[str, str]] = []
         for style, thickness, length, arch in STYLE_CANDIDATES:

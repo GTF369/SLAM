@@ -160,16 +160,34 @@ class BrowWorkflowInstrumentedTest {
     @Test
     fun conditionalChoiceProbabilitiesAreNormalizedAndTemperatureCalibrated() {
         val base = FloatArray(15) { (it + 1) / 20f }
+        base[9] = 0.40f // soft-style candidate indicator
+        base[10] = 0.25f // defined-style candidate indicator
         val expanded = BrowChoiceFeatureBuilder.expand(base)
-        assertEquals("Model feature schema must have 35 entries", 35, expanded.size)
+        assertEquals("Model feature schema must have 39 entries", 39, expanded.size)
+        assertEquals(39, BrowChoiceFeatureBuilder.featureOrder.size)
 
-        val coefficients = FloatArray(35)
+        val coefficients = FloatArray(39)
         coefficients[15] = 1f // face width/height x thickness interaction
         val utility = BrowChoiceFeatureBuilder.utility(
-            base, FloatArray(35), FloatArray(35) { 1f }, coefficients
+            base, FloatArray(39), FloatArray(39) { 1f }, coefficients
         )
         assertEquals("Interaction utility must match the Python feature schema",
             base[0] * base[6], utility, 1e-6f)
+
+        val softIntent = BrowChoiceFeatureBuilder.expand(base, preferredStyle = 1)
+        val definedIntent = BrowChoiceFeatureBuilder.expand(base, preferredStyle = 2)
+        val softMatch = BrowChoiceFeatureBuilder.featureOrder.indexOf("design_intent_soft_x_style_soft")
+        val softMismatch = BrowChoiceFeatureBuilder.featureOrder.indexOf("design_intent_soft_x_style_defined")
+        val definedMismatch = BrowChoiceFeatureBuilder.featureOrder.indexOf("design_intent_defined_x_style_soft")
+        val definedMatch = BrowChoiceFeatureBuilder.featureOrder.indexOf("design_intent_defined_x_style_defined")
+        assertTrue("All intent interaction terms must be named in the schema",
+            listOf(softMatch, softMismatch, definedMismatch, definedMatch).all { it >= 0 })
+        assertEquals(base[9], softIntent[softMatch], 1e-6f)
+        assertEquals(base[10], softIntent[softMismatch], 1e-6f)
+        assertEquals(0f, softIntent[definedMatch], 1e-6f)
+        assertEquals(base[9], definedIntent[definedMismatch], 1e-6f)
+        assertEquals(base[10], definedIntent[definedMatch], 1e-6f)
+        assertEquals(0f, expanded[softMatch], 1e-6f)
 
         val probabilities = BrowChoiceFeatureBuilder.probabilities(floatArrayOf(0f, 1f, -1f), 1f)
         assertEquals("Probabilities must sum to one", 1.0, probabilities.sum().toDouble(), 1e-6)

@@ -4459,7 +4459,7 @@ private object BrowRecommendationEngine {
         }
         val choiceModel = loadChoiceModel(context)
         if (choiceModel != null) {
-            return rankWithChoiceModel(features, templates, choiceModel)
+            return rankWithChoiceModel(features, templates, choiceModel, preferredStyle.coerceIn(0, 2))
         }
         val model = loadModel(context)
         if (model != null) {
@@ -4567,14 +4567,16 @@ private object BrowRecommendationEngine {
     private fun rankWithChoiceModel(
         features: BrowFaceMeasurements,
         templates: List<BrowRecommendation>,
-        model: TrainedChoiceModel
+        model: TrainedChoiceModel,
+        preferredStyle: Int
     ): List<BrowRecommendation> {
         val logits = FloatArray(templates.size) { index ->
             BrowChoiceFeatureBuilder.utility(
                 candidateFeatures(features, templates[index].params),
                 model.means,
                 model.scales,
-                model.coefficients
+                model.coefficients,
+                preferredStyle
             )
         }
         val probabilities = BrowChoiceFeatureBuilder.probabilities(logits, model.temperature)
@@ -4596,7 +4598,7 @@ private object BrowRecommendationEngine {
             val json = context.assets.open("brow_choice_ranker.json")
                 .bufferedReader(Charsets.UTF_8).use { it.readText() }
             val root = org.json.JSONObject(json)
-            if (root.optInt("model_version", -1) != 1 ||
+            if (root.optInt("model_version", -1) != 2 ||
                 root.optString("model_type") != "conditional_choice" ||
                 !root.optBoolean("release_approved", false) ||
                 root.optString("calibration_status") != "temperature_scaling") return null

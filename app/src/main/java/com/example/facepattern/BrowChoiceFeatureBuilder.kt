@@ -44,12 +44,17 @@ internal object BrowChoiceFeatureBuilder {
         "eye_line_tilt_x_style_defined",
         "native_brow_area_fraction_x_thickness",
         "native_brow_side_imbalance_x_thickness",
-        "native_brow_side_imbalance_x_arch"
+        "native_brow_side_imbalance_x_arch",
+        "design_intent_soft_x_style_soft",
+        "design_intent_soft_x_style_defined",
+        "design_intent_defined_x_style_soft",
+        "design_intent_defined_x_style_defined"
     )
 
-    fun expand(base: FloatArray): FloatArray {
+    fun expand(base: FloatArray, preferredStyle: Int = 0): FloatArray {
         require(base.size == 15) { "Expected 15 base candidate features, got ${base.size}" }
         require(base.all { it.isFinite() }) { "Candidate features must be finite" }
+        require(preferredStyle in 0..2) { "Preferred style must be 0, 1, or 2" }
         val faceWidth = base[0]
         val interocular = base[1]
         val jaw = base[2]
@@ -85,19 +90,28 @@ internal object BrowChoiceFeatureBuilder {
             sideImbalance * thickness,
             sideImbalance * arch
         )
-        return base + interactions
+        val intentSoft = if (preferredStyle == 1) 1f else 0f
+        val intentDefined = if (preferredStyle == 2) 1f else 0f
+        val intentInteractions = floatArrayOf(
+            intentSoft * styleSoft,
+            intentSoft * styleDefined,
+            intentDefined * styleSoft,
+            intentDefined * styleDefined
+        )
+        return base + interactions + intentInteractions
     }
 
     fun utility(
         base: FloatArray,
         means: FloatArray,
         scales: FloatArray,
-        coefficients: FloatArray
+        coefficients: FloatArray,
+        preferredStyle: Int = 0
     ): Float {
-        val expanded = expand(base)
+        val expanded = expand(base, preferredStyle)
         require(means.size == expanded.size && scales.size == expanded.size &&
             coefficients.size == expanded.size) {
-            "Conditional-choice model arrays must match the 35-feature schema"
+            "Conditional-choice model arrays must match the 39-feature schema"
         }
         var total = 0.0
         for (index in expanded.indices) {
