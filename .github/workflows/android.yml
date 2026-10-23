@@ -163,8 +163,21 @@ jobs:
         run: python -m pip install -r ml/requirements.txt
       - name: Check Python syntax
         run: python -m compileall -q ml
-      - name: Test curvature statistics and ranker gates
+      - name: Test curvature statistics, ranker gates, and synthetic geometry
         run: python -m unittest discover -s ml/tests -v
+      - name: Run synthetic preference probability calibration sandbox
+        run: python ml/simulate_brow_ranker_sandbox.py --output /tmp/brow-ranker-sandbox-report.json
+      - name: Run synthetic 3D surface compensation sandbox
+        run: python ml/simulate_surface_compensation.py --output /tmp/surface-compensation-sandbox-report.json
+      - name: Upload synthetic model and geometry reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: brow-sandbox-model-validation
+          path: |
+            /tmp/brow-ranker-sandbox-report.json
+            /tmp/surface-compensation-sandbox-report.json
+          if-no-files-found: error
+          retention-days: 14
 
   public-image-smoke-test:
     runs-on: ubuntu-latest
