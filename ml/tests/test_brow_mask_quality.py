@@ -21,6 +21,11 @@ class BrowMaskQualityTests(unittest.TestCase):
         self.assertTrue(is_plausible_brow_mask(20, 1000))
         self.assertTrue(is_plausible_brow_mask(280, 1000))
 
+    def test_rejects_masks_leaking_into_roi_border(self):
+        self.assertTrue(is_plausible_brow_mask(200, 1000, border_pixels=2))
+        self.assertFalse(is_plausible_brow_mask(200, 1000, border_pixels=20))
+        self.assertFalse(is_plausible_brow_mask(200, 1000, border_pixels=200))
+
     def test_rejects_empty_and_invalid_counts(self):
         self.assertFalse(is_plausible_brow_mask(0, 1000))
         self.assertFalse(is_plausible_brow_mask(19, 1000))
