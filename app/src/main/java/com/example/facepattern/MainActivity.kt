@@ -1968,7 +1968,7 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     "局部圆弧近似半径 R≈${"%.1f".format(estimatedRadiusMm)} mm，曲率约 ${"%.5f".format(1f / estimatedRadiusMm)} mm⁻¹"
                 }
-                Toast.makeText(this, "实测修正系数 k = ${"%.3f".format(factor)}。\n" + radiusText + "\n" + interval, Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "实测弧长/空间弦长比 k = ${"%.3f".format(factor)}（打印时另按照片投影长度计算补偿）。\n" + radiusText + "\n" + interval, Toast.LENGTH_LONG).show()
             }
             .setNeutralButton("导出 CSV") { _, _ -> exportCurvatureCsv() }
             .create().also { dialog ->
@@ -3530,7 +3530,13 @@ class MainActivity : AppCompatActivity() {
         "右眉头", "右眉身", "右眉峰", "右眉尾"
     )
 
-    private fun currentCurvatureFactorsForPrint(): Map<String, Float> {
+    /**
+     * Return customer-level median surface arc lengths. The stored arc/chord ratio is
+     * useful as a measurement sanity check, but is NOT the final image-to-surface scale.
+     * Printing recomputes that scale from the current photo's projected segment length
+     * and the measured interpupillary distance.
+     */
+    private fun currentCurvatureArcLengthsForPrint(): Map<String, Float> {
         val records = org.json.JSONArray(
             getSharedPreferences("brow_curvature_samples", Context.MODE_PRIVATE).getString("records", "[]")
         )
@@ -3539,15 +3545,77 @@ class MainActivity : AppCompatActivity() {
             val row = records.optJSONObject(i) ?: continue
             if (row.optString("case_id") != currentCaseId) continue
             val region = row.optString("region")
-            val factor = row.optDouble("factor", Double.NaN).toFloat()
-            if (region !in curvatureRegionNames || !factor.isFinite() || factor !in 1.0f..1.5708f) continue
-            valuesByRegion.getOrPut(region) { mutableListOf() }.add(factor)
+            val arcMm = row.optDouble("arc_mm", Double.NaN).toFloat()
+            val chordMm = row.optDouble("chord_mm", Double.NaN).toFloat()
+            val ratio = if (chordMm > 0f) arcMm / chordMm else Float.NaN
+            if (region !in curvatureRegionNames ||
+                !arcMm.isFinite() || !chordMm.isFinite() ||
+                arcMm <= 0f || chordMm <= 0f ||
+                !ratio.isFinite() || ratio !in 1.0f..1.5708f) continue
+            valuesByRegion.getOrPut(region) { mutableListOf() }.add(arcMm)
         }
-        return valuesByRegion.mapValues { (_, factors) ->
-            val sorted = factors.sorted()
+        return valuesByRegion.mapValues { (_, arcs) ->
+            val sorted = arcs.sorted()
             if (sorted.size % 2 == 1) sorted[sorted.size / 2]
             else (sorted[sorted.size / 2 - 1] + sorted[sorted.size / 2]) / 2f
         }
+    }
+
+    /** Pixel chord of the exact landmark segment used for the selected anatomical region. */
+    private fun projectedBrowSegmentPixels(points: List<PointF>, region: String): Float? {
+        if (points.size < 455 || region !in curvatureRegionNames) return null
+        val noseX = points.getOrNull(1)?.x ?: return null
+        val browSets = listOf(
+            intArrayOf(70, 63, 105, 66, 107),
+            intArrayOf(300, 293, 334, 296, 336)
+        )
+        for (ids in browSets) {
+            val ordered = ids.mapNotNull { points.getOrNull(it) }
+                .filter { it.x.isFinite() && it.y.isFinite() }
+                .sortedBy { it.x }
+            if (ordered.size != ids.size) continue
+            val sideCenter = ordered.map { it.x }.average().toFloat()
+            val anatomicalRight = sideCenter < noseX
+            val segmentNames = if (anatomicalRight) {
+                listOf("右眉尾", "右眉峰", "右眉身", "右眉头")
+            } else {
+                listOf("左眉头", "左眉身", "左眉峰", "左眉尾")
+            }
+            val segmentIndex = segmentNames.indexOf(region)
+            if (segmentIndex < 0) continue
+            val a = ordered[segmentIndex]
+            val b = ordered[segmentIndex + 1]
+            return kotlin.math.hypot((b.x - a.x).toDouble(), (b.y - a.y).toDouble()).toFloat()
+        }
+        return null
+    }
+
+    /**
+     * Map each physically measured surface arc to its projected length in the current
+     * photo, converted to millimetres using measured interpupillary distance. This is
+     * the image-to-surface scale, unlike arc_mm / spatial_chord_mm.
+     */
+    private fun currentCurvatureFactorsForPrint(
+        points: List<PointF>,
+        interpupillaryDistanceMm: Float,
+        surfaceArcsMm: Map<String, Float>
+    ): Map<String, Float> {
+        if (!interpupillaryDistanceMm.isFinite() || interpupillaryDistanceMm !in 35f..90f) {
+            return emptyMap()
+        }
+        val pupilDistancePx = BrowRenderer.pupilDistance(points)
+        if (!pupilDistancePx.isFinite() || pupilDistancePx < 5f) return emptyMap()
+        val factors = linkedMapOf<String, Float>()
+        for (region in curvatureRegionNames) {
+            val surfaceArcMm = surfaceArcsMm[region] ?: continue
+            val projectedSegmentPx = projectedBrowSegmentPixels(points, region) ?: continue
+            if (!surfaceArcMm.isFinite() || surfaceArcMm <= 0f ||
+                !projectedSegmentPx.isFinite() || projectedSegmentPx < 2f) continue
+            val projectedSegmentMm = projectedSegmentPx / pupilDistancePx * interpupillaryDistanceMm
+            if (!projectedSegmentMm.isFinite() || projectedSegmentMm <= 0f) continue
+            factors[region] = surfaceArcMm / projectedSegmentMm
+        }
+        return factors
     }
 
     /**
@@ -3588,7 +3656,7 @@ class MainActivity : AppCompatActivity() {
                 val planar = hypot(dx.toDouble(), dy.toDouble()).toFloat()
                 val spatial = hypot(planar.toDouble(), dz.toDouble()).toFloat()
                 val factor = if (planar > 0.5f && spatial.isFinite()) {
-                    (spatial / planar).coerceIn(1f, 1.4f)
+                    (spatial / planar).coerceIn(0.75f, 1.6f)
                 } else {
                     1f
                 }
@@ -3627,14 +3695,14 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "未检测到完整虹膜关键点，暂时无法可靠建立 1:1 打印比例，请重新拍摄", Toast.LENGTH_LONG).show()
             return
         }
-        val measuredFactors = currentCurvatureFactorsForPrint()
+        val measuredArcs = currentCurvatureArcLengthsForPrint()
         val input = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             hint = "请输入实测瞳距（毫米）"
             setText("")
         }
         val calibrationInfo = TextView(this).apply {
-            text = "已记录当前顾客的曲率区域：${measuredFactors.size}/8。必须使用柔性尺测表面弧长，并测量同一段两端距离。"
+            text = "已记录当前顾客的表面弧长：${measuredArcs.size}/8 区域。打印时会用当前照片各眉区的投影长度（按实测瞳距换算）计算补偿比例。"
             textSize = 12f
             setPadding(dp(4), dp(6), dp(4), dp(6))
         }
@@ -3669,13 +3737,13 @@ class MainActivity : AppCompatActivity() {
             isChecked = false
         }
         val applyCorrection = CheckBox(this).apply {
-            text = "应用此顾客已实测的区域长度修正（优先使用实测值）"
+            text = "应用此顾客已实测的眉弓曲面长度补偿（仍需转印验证）"
             // Physical measurements remain opt-in and have priority over estimated depth.
             isChecked = false
-            isEnabled = measuredFactors.size == curvatureRegionNames.size
+            isEnabled = measuredArcs.size == curvatureRegionNames.size
         }
         val note = TextView(this).apply {
-            text = "安全限制：MediaPipe 的相对 z 不是毫米级皮肤表面测量，单张正面照片无法恢复真实三维眉弓。因此深度估计不会参与打印尺寸或曲面补偿。只有同一顾客、同一端点的八个区域都完成实测，才可以手动选择实验性长度修正。它仍不代表已验证的三维贴合。每次更换打印机、纸张或驱动设置后，都必须重新量取打印出的 20 mm 校准框。"
+            text = "曲面补偿以真实测得的八个眉区表面弧长为依据，并按本张照片的眉区投影段长度与实测瞳距换算比例。MediaPipe 相对 z 不作为毫米级深度使用。若补偿比例超出 0.75–1.60，程序会拒绝该次补偿。该方法是分区弧长映射，不等于单张照片三维重建，仍需独立 3D/物理测量与真实转印验证。更换打印机、纸张或驱动设置后，仍需重新测量 20 mm 校准框。"
             textSize = 11f
             setPadding(dp(4), dp(2), dp(4), dp(2))
         }
@@ -3756,15 +3824,34 @@ class MainActivity : AppCompatActivity() {
                     return@setPositiveButton
                 }
                 val useMeasuredCurvature = applyCorrection.isChecked
-                if (useMeasuredCurvature && measuredFactors.size != curvatureRegionNames.size) {
-                    Toast.makeText(this, "8 个区域的实测值不完整，不能应用实测区域修正", Toast.LENGTH_LONG).show()
+                if (useMeasuredCurvature && measuredArcs.size != curvatureRegionNames.size) {
+                    Toast.makeText(this, "8 个区域的真实表面弧长记录不完整，不能应用曲面补偿", Toast.LENGTH_LONG).show()
                     return@setPositiveButton
                 }
-                // Do not inject MediaPipe relative-z estimates into physical print geometry.
-                // A future release must calibrate a real 3D method against independent
-                // measurements and held-out stencil-transfer error before it is eligible.
+                // Convert each measured skin-surface arc to the current photo's projected
+                // segment scale. Do not treat arc/chord ratio or MediaPipe relative-z as
+                // the final image-to-surface correction factor.
+                val factorsToApply = if (useMeasuredCurvature) {
+                    currentCurvatureFactorsForPrint(points, measuredMm, measuredArcs)
+                } else {
+                    emptyMap()
+                }
+                if (useMeasuredCurvature && factorsToApply.size != curvatureRegionNames.size) {
+                    Toast.makeText(this, "无法将八个实测弧长与当前照片眉区及瞳距匹配，请重新检查关键点和测量端点", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                val outOfRangeFactors = factorsToApply.filterValues {
+                    !it.isFinite() || it !in 0.75f..1.60f
+                }
+                if (useMeasuredCurvature && outOfRangeFactors.isNotEmpty()) {
+                    Toast.makeText(
+                        this,
+                        "曲面补偿比例超出 0.75–1.60，已拒绝本次补偿。请核对弧长、端点、照片姿态和瞳距。",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return@setPositiveButton
+                }
                 val useCurvature = useMeasuredCurvature
-                val factorsToApply = if (useMeasuredCurvature) measuredFactors else emptyMap()
                 val template = BrowRenderer.createTemplate(
                     points,
                     params,
@@ -4512,7 +4599,7 @@ private object BrowRenderer {
             val cumulative = mutableListOf(PointF(ordered.first().x, ordered.first().y))
             for (i in 0 until ordered.lastIndex) {
                 val rawFactor = curvatureFactors[segmentRegions[i]] ?: 1f
-                val factor = rawFactor.coerceIn(1f, 1.4f)
+                val factor = rawFactor.coerceIn(0.75f, 1.6f)
                 val dx = ordered[i + 1].x - ordered[i].x
                 val dy = ordered[i + 1].y - ordered[i].y
                 val previous = cumulative.last()
@@ -4754,7 +4841,7 @@ private object BrowRenderer {
             for (i in 1 until width) {
                 val t = (i - 0.5f) / (width - 1).coerceAtLeast(1)
                 val segment = min(3, (t * 4f).toInt())
-                val factor = (curvatureFactors[segmentNames[segment]] ?: 1f).coerceIn(1f, 1.4f)
+                val factor = (curvatureFactors[segmentNames[segment]] ?: 1f).coerceIn(0.75f, 1.6f)
                 cumulative[i] = cumulative[i - 1] + factor
             }
             val cumulativeCenter = (cumulative.first() + cumulative.last()) / 2f
@@ -4879,7 +4966,7 @@ private object BrowRenderer {
         val landmarkPoints = browSets.flatMap { ids -> ids.map { index -> points.getOrNull(index) }.filterNotNull() }
         if (landmarkPoints.isEmpty()) return null
         val faceWidth = if (points.size > 454) abs(points[454].x - points[234].x) else width * 0.35f
-        val maxCorrection = curvatureFactors.values.maxOrNull()?.coerceIn(1f, 1.4f) ?: 1f
+        val maxCorrection = curvatureFactors.values.maxOrNull()?.coerceIn(0.75f, 1.6f) ?: 1f
         val marginX = max(8f, faceWidth * (0.06f + (maxCorrection - 1f) * 0.08f))
         val marginY = max(8f, faceWidth * 0.11f)
 
@@ -4928,7 +5015,7 @@ private object BrowRenderer {
         val browPoints = browSets.flatMap { ids -> ids.map { index -> points.getOrNull(index) }.filterNotNull() }
         if (browPoints.isEmpty()) return null
         val faceWidth = if (points.size > 454) abs(points[454].x - points[234].x) else width * 0.35f
-        val maxCorrection = curvatureFactors.values.maxOrNull()?.coerceIn(1f, 1.4f) ?: 1f
+        val maxCorrection = curvatureFactors.values.maxOrNull()?.coerceIn(0.75f, 1.6f) ?: 1f
         val marginX = max(8f, faceWidth * (0.06f + (maxCorrection - 1f) * 0.9f))
         val marginY = max(8f, faceWidth * 0.11f)
         val left = (browPoints.minOf { it.x } - marginX).toInt().coerceIn(0, width - 1)
