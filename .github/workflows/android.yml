@@ -106,7 +106,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-audio -no-boot-anim -no-snapshot -memory 4096 -cores 2
           disable-animations: true
           script: |
-            set -euo pipefail
+            set -eu
             adb devices
             adb wait-for-device
             adb shell getprop sys.boot_completed
