@@ -4008,8 +4008,10 @@ private data class BrowRecommendation(
     val score: Int,
     val params: BrowParams,
     val reason: String,
-    // Present only when a separately calibrated and reviewed preference model is loaded.
-    val probability: Float? = null
+    // Present only when a separately calibrated and reviewed probability model is loaded.
+    val probability: Float? = null,
+    val probabilityType: String? = null,
+    val choiceLogit: Float? = null
 )
 
 private data class BrowFaceMeasurements(
@@ -4038,8 +4040,16 @@ private object BrowRecommendationEngine {
         val calibrationIntercept: Float,
         val calibrationSlope: Float
     )
+    private data class TrainedChoiceModel(
+        val means: FloatArray,
+        val scales: FloatArray,
+        val coefficients: FloatArray,
+        val temperature: Float
+    )
     private var loadAttempted = false
     private var trainedModel: TrainedModel? = null
+    private var choiceLoadAttempted = false
+    private var trainedChoiceModel: TrainedChoiceModel? = null
 
     fun measurements(
         points: List<PointF>,
