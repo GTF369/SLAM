@@ -172,6 +172,7 @@ internal object BrowSegmentationEngine {
         var qualitySum = 0f
         var processedRegions = 0
         var modelAppliedRegions = 0
+        var rejectedRegions = 0
 
         for (bounds in regions) {
             val x0 = bounds[0]
@@ -206,6 +207,7 @@ internal object BrowSegmentationEngine {
             val candidateCount = candidateMask.count { it }
             val candidateRatio = candidateCount.toFloat() / candidateMask.size.coerceAtLeast(1)
             val acceptedMask = isPlausibleBrowMask(candidateCount, candidateMask.size)
+            if (!acceptedMask) rejectedRegions++
             val mask = if (acceptedMask) candidateMask else BooleanArray(candidateMask.size)
             val ratio = if (acceptedMask) candidateRatio else 0f
             val localQuality = when {
@@ -238,6 +240,8 @@ internal object BrowSegmentationEngine {
             "EasyPortrait BiSeNet 人脸解析模型"
         }
         val method = when {
+            rejectedRegions > 0 && !usedModel -> "眉区面积检查未通过，需手工修正"
+            rejectedRegions > 0 -> "$modelLabel + 部分眉区需手工修正"
             !usedModel -> "自适应对比度预分割"
             modelAppliedRegions == regions.size -> modelLabel
             else -> "$modelLabel + 对比度补底"
