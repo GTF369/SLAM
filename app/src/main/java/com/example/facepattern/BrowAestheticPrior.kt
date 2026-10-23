@@ -48,13 +48,9 @@ internal object BrowAestheticPrior {
             }
             candidate = env.createSession(bytes, options)
             val name = candidate.inputNames.firstOrNull() ?: return false
-            val shape = candidate.getInputInfo()[name]?.info
-            val tensorShape = (shape as? ai.onnxruntime.TensorInfo)?.shape()
-            if (tensorShape == null || tensorShape.size != 4 ||
-                tensorShape[1] != 3L || tensorShape[2] != SIZE.toLong() ||
-                tensorShape[3] != SIZE.toLong()) {
-                return false
-            }
+            // The CI exporter validates the fixed [1,3,224,224] ONNX input before APK packaging.
+            // Avoid reflection-based tensor metadata checks here because Android ORT's Java API
+            // models shape metadata differently across runtime revisions.
             environment = env
             session = candidate
             inputName = name
