@@ -40,7 +40,8 @@ def main() -> None:
             "n_cases": len(cases),
             "n_regions": sum(len(case["segments"]) for case in cases),
             "max_segment_error_mm": max(case["max_segment_error_mm"] for case in cases),
-            "max_total_length_error_mm": max(case["absolute_total_length_error_mm"] for case in cases),
+            "max_raw_total_length_error_mm": max(case["raw_absolute_total_length_error_mm"] for case in cases),
+            "max_compensated_total_length_error_mm": max(case["compensated_absolute_total_length_error_mm"] for case in cases),
             "all_factors_in_supported_range": all(
                 0.75 <= segment["factor"] <= 1.60
                 for case in cases for segment in case["segments"]
