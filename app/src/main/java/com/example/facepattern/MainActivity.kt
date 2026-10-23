@@ -164,6 +164,9 @@ class MainActivity : AppCompatActivity() {
     // MediaPipe z is a relative depth estimate, scaled to image width rather than millimetres.
     private var capturedLandmarkDepths: List<Float> = emptyList()
     private var params = BrowParams()
+    // Explicit style intent is a user preference, not an inferred personality attribute.
+    private var selectedDesignIntent: Int = 0
+    private val designIntentLabels = listOf("均衡自然", "偏柔和", "偏立体")
     private val history = mutableListOf<BrowParams>()
     private val savedPlans = mutableListOf<BrowPlan>()
     private var transitionAnimator: ValueAnimator? = null
@@ -368,6 +371,46 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(2), dp(2), dp(2), dp(6))
         }
         designControls.addView(recommendationLabel)
+        selectedDesignIntent = getSharedPreferences("brow_design_preference", Context.MODE_PRIVATE)
+            .getInt("style_intent", 0).coerceIn(0, 2)
+        val styleIntentRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        styleIntentRow.addView(TextView(this).apply {
+            text = "风格倾向"
+            textSize = 12f
+            setTextColor(Color.WHITE)
+        }, LinearLayout.LayoutParams(dp(66), -2))
+        val styleIntentSpinner = android.widget.Spinner(this).apply {
+            adapter = android.widget.ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                designIntentLabels
+            )
+            setSelection(selectedDesignIntent, false)
+            onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+                override fun onItemSelected(
+                    parent: android.widget.AdapterView<*>?,
+                    view: View?,
+                    position: Int,
+                    id: Long
+                ) {
+                    val next = position.coerceIn(0, 2)
+                    val changed = selectedDesignIntent != next
+                    selectedDesignIntent = next
+                    getSharedPreferences("brow_design_preference", Context.MODE_PRIVATE).edit()
+                        .putInt("style_intent", next)
+                        .apply()
+                    if (changed && capturedPhoto != null && ::recommendationRow.isInitialized) {
+                        refreshRecommendations(browView.facePoints())
+                    }
+                }
+            }
+        }
+        styleIntentRow.addView(styleIntentSpinner, LinearLayout.LayoutParams(0, dp(42), 1f))
+        designControls.addView(styleIntentRow)
         recommendationRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -1227,8 +1270,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshRecommendations(points: List<PointF>) {
         recommendationRow.removeAllViews()
-        val ranked = BrowRecommendationEngine.rank(this, points, segmentationResult, segmentationReviewed, useNativeShape)
-        recommendationLabel.text = BrowRecommendationEngine.sourceLabel(this)
+        val ranked = BrowRecommendationEngine.rank(
+            this, points, segmentationResult, segmentationReviewed, useNativeShape,
+            preferredStyle = selectedDesignIntent
+        )
+        recommendationLabel.text = BrowRecommendationEngine.sourceLabel(this) +
+            "\n当前风格倾向：${designIntentLabels[selectedDesignIntent]}。倾向可随时修改，最终仍由顾客与设计师确认。"
         ranked.forEach { recommendation ->
             val button = Button(this).apply {
                 text = when (recommendation.probabilityType) {
@@ -3268,6 +3315,7 @@ class MainActivity : AppCompatActivity() {
                     put("native_brow_side_imbalance", features.nativeBrowSideImbalance.toDouble())
                     put("native_brow_mask_available", features.nativeBrowMaskAvailable.toDouble())
                     put("native_shape_mode", features.nativeShapeMode.toDouble())
+                    put("design_intent", designIntentLabels[selectedDesignIntent])
                     put("timestamp", System.currentTimeMillis())
                 }
                 dataset.put(item)
@@ -3317,7 +3365,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val csv = buildString {
-            append("case_id,session_id,style,thickness,length,arch,rating,selected,face_width_height_ratio,interocular_face_width_ratio,jaw_face_width_ratio,brow_eye_distance_ratio,brow_asymmetry_ratio,eye_line_tilt,native_brow_area_fraction,native_brow_side_imbalance,native_brow_mask_available,native_shape_mode,timestamp\n")
+            append("case_id,session_id,style,thickness,length,arch,rating,selected,face_width_height_ratio,interocular_face_width_ratio,jaw_face_width_ratio,brow_eye_distance_ratio,brow_asymmetry_ratio,eye_line_tilt,native_brow_area_fraction,native_brow_side_imbalance,native_brow_mask_available,native_shape_mode,timestamp,design_intent\n")
             for (i in 0 until records.length()) {
                 val row = records.optJSONObject(i) ?: continue
                 append(row.optString("case_id")).append(',')
@@ -3338,7 +3386,8 @@ class MainActivity : AppCompatActivity() {
                 append(row.optDouble("native_brow_side_imbalance")).append(',')
                 append(row.optDouble("native_brow_mask_available")).append(',')
                 append(row.optDouble("native_shape_mode")).append(',')
-                append(row.optLong("timestamp")).append('\n')
+                append(row.optLong("timestamp")).append(',')
+                append(row.optString("design_intent", "均衡自然")).append('\n')
             }
         }
         val filename = "brow_preference_feedback_${System.currentTimeMillis()}.csv"
@@ -4183,7 +4232,8 @@ private object BrowRecommendationEngine {
         points: List<PointF>,
         segmentation: BrowSegmentationResult?,
         maskReviewed: Boolean,
-        nativeShapeMode: Boolean
+        nativeShapeMode: Boolean,
+        preferredStyle: Int = 0
     ): List<BrowRecommendation> {
         val features = measurements(points, segmentation, maskReviewed, nativeShapeMode)
         val baseTemplates = listOf(
@@ -4205,10 +4255,13 @@ private object BrowRecommendationEngine {
             nativeBrowSideImbalance = features.nativeBrowSideImbalance,
             nativeBrowMaskAvailable = features.nativeBrowMaskAvailable
         )
+        val intentAdjustedParams = BrowGeometryAdapter.applyStyleIntent(
+            adaptedParams, preferredStyle.coerceIn(0, 2)
+        )
         val templates = baseTemplates.mapIndexed { index, candidate ->
             candidate.copy(
-                params = adaptedParams[index],
-                reason = "${candidate.name}：根据面部比例及已确认的原生眉区做了小幅几何适配。结果是可编辑初稿，不是经训练的概率预测。"
+                params = intentAdjustedParams[index],
+                reason = "${candidate.name}：根据面部比例、可选的已确认原生眉区和用户风格倾向做了有限幅度的几何适配。结果是可编辑初稿，风格倾向不是人格识别。"
             )
         }
         val choiceModel = loadChoiceModel(context)
@@ -4274,19 +4327,24 @@ private object BrowRecommendationEngine {
             features.nativeBrowSideImbalance.coerceIn(0f, 1f)
         } else 0f
         val penalty = (features.browAsymmetryRatio * 35f).coerceIn(0f, 5f)
-        val naturalScore = 82f - abs(shapeSignal) * 3.5f - penalty
+        val naturalScore = 82f - abs(shapeSignal) * 3.5f - penalty +
+            (if (preferredStyle == 0) 4f else 0f) +
+            (if (preferredStyle == 1) 1f else 0f) +
+            (if (preferredStyle == 2) 1f else 0f)
         val softScore = 78f +
             (-jawSignal).coerceAtLeast(0f) * 3.5f +
             (-eyeSpacingSignal).coerceAtLeast(0f) * 2f +
             browGapSignal.coerceAtLeast(0f) * 1.5f -
-            penalty * 0.6f
+            penalty * 0.6f +
+            (if (preferredStyle == 1) 8f else 0f)
         val definedScore = 76f +
             jawSignal.coerceAtLeast(0f) * 3f +
             eyeSpacingSignal.coerceAtLeast(0f) * 2f +
             shapeSignal.coerceAtLeast(0f) * 2f +
             tiltSignal.coerceAtLeast(0f) -
             penalty * 0.4f -
-            maskImbalance * 2f
+            maskImbalance * 2f +
+            (if (preferredStyle == 2) 8f else 0f)
         return listOf(
             templates[0].copy(score = naturalScore.roundToInt().coerceIn(60, 95)),
             templates[1].copy(score = softScore.roundToInt().coerceIn(60, 95)),

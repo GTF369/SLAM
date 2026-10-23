@@ -45,4 +45,23 @@ internal object BrowGeometryAdapter {
             )
         }
     }
+
+    /**
+     * Apply a small, reversible style preference to the candidate set.
+     * 0 = balanced, 1 = softer, 2 = more defined. No personality is inferred.
+     */
+    fun applyStyleIntent(candidates: List<BrowParams>, preferredStyle: Int): List<BrowParams> {
+        val (thicknessShift, lengthShift, archShift) = when (preferredStyle.coerceIn(0, 2)) {
+            1 -> Triple(-0.025f, -0.01f, -0.065f)
+            2 -> Triple(0.035f, 0.015f, 0.075f)
+            else -> Triple(0f, 0f, 0f)
+        }
+        return candidates.map { base ->
+            base.copy(
+                thickness = (base.thickness + thicknessShift).coerceIn(0.55f, 1.45f),
+                length = (base.length + lengthShift).coerceIn(0.80f, 1.20f),
+                arch = (base.arch + archShift).coerceIn(0.55f, 1.45f)
+            )
+        }
+    }
 }

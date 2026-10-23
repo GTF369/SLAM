@@ -167,3 +167,8 @@ Each session must contain exactly one natural, one soft and one defined row with
 The CI synthetic conditional-choice sandbox uses generated customers and a known probability generator to check feature order, optimization, temperature scaling and probability normalization. It is not evidence of real-salon performance. The Android probability feature-vector and surface-compensation tests separately verify implementation consistency.
 
 For 2D-to-surface length compensation, the application uses the measured surface arc for each of eight matching brow regions and its projected photo segment calibrated by the measured interpupillary distance. Incomplete measurements or factors outside 0.75–1.60 are rejected. The synthetic 3D pinhole experiment checks numerical consistency on a known surface only. Actual transfer accuracy still requires independent surface measurements, OPPO-device testing and a physical print/transfer study.
+
+
+## 5. Explicit design-style intent
+
+The Android app lets the artist/customer select a simple, explicit style direction: balanced/natural, softer, or more defined. This is treated as a design preference, not as inferred personality or an objectively correct aesthetic. It applies a small bounded shift to thickness, length, and arch, while preserving the underlying face-geometry adjustment and the user's ability to edit or undo. Preference feedback CSV now records the selected direction as `design_intent`. The current probability models do not use this column as a trained feature, so it must not be described as a learned personality signal.

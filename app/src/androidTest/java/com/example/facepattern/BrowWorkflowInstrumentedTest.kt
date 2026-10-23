@@ -627,4 +627,26 @@ class BrowWorkflowInstrumentedTest {
         assertEquals(listOf(0, 1, 2), narrowerFace.map { it.style })
     }
 
+    @Test
+    fun styleIntentChangesCandidateParametersWithoutBreakingLimits() {
+        val base = listOf(
+            BrowParams(1.0f, 1.0f, 0.92f, 0),
+            BrowParams(0.82f, 0.94f, 0.72f, 1),
+            BrowParams(1.18f, 1.06f, 1.22f, 2)
+        )
+        val balanced = BrowGeometryAdapter.applyStyleIntent(base, 0)
+        val soft = BrowGeometryAdapter.applyStyleIntent(base, 1)
+        val defined = BrowGeometryAdapter.applyStyleIntent(base, 2)
+        assertEquals(base, balanced)
+        assertTrue("Soft intent should lower the arch parameter",
+            soft.zip(base).all { (a, b) -> a.arch <= b.arch })
+        assertTrue("Defined intent should increase the arch parameter",
+            defined.zip(base).all { (a, b) -> a.arch >= b.arch })
+        listOf(balanced, soft, defined).flatten().forEach { item ->
+            assertTrue(item.thickness in 0.55f..1.45f)
+            assertTrue(item.length in 0.80f..1.20f)
+            assertTrue(item.arch in 0.55f..1.45f)
+        }
+    }
+
 }
