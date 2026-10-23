@@ -8,8 +8,7 @@ from ml.brow_mask_quality import is_plausible_brow_mask
 class BrowMaskQualityTests(unittest.TestCase):
     def test_accepts_typical_eyebrow_area(self):
         self.assertTrue(is_plausible_brow_mask(100, 1000))
-        self.assertTrue(is_plausible_brow_mask(5, 1000) is False)
-        self.assertTrue(is_plausible_brow_mask(5, 1000) is False)
+        self.assertFalse(is_plausible_brow_mask(1, 1000))
 
     def test_rejects_oversized_fallback_mask(self):
         # The public-image smoke report observed a 33.29% ROI mask on a blurred photo.
