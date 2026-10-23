@@ -1,7 +1,7 @@
 name: Build Android APK
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, feature/portable-case-backup-validated ]
   pull_request:
   workflow_dispatch:
 # Keep only the latest PR validation run active. This workflow builds Android, runs
