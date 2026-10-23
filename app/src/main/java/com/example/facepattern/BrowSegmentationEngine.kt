@@ -15,11 +15,39 @@ import kotlin.math.max
 import kotlin.math.min
 import org.tensorflow.lite.Interpreter
 
-/** Reject empty or implausibly large eyebrow masks instead of silently accepting them. */
-internal fun isPlausibleBrowMask(selectedPixels: Int, regionPixels: Int): Boolean {
-    if (regionPixels <= 0 || selectedPixels < 0 || selectedPixels > regionPixels) return false
+/** Reject sparse, oversized or ROI-border-leaking eyebrow masks for manual correction. */
+internal fun isPlausibleBrowMask(
+    selectedPixels: Int,
+    regionPixels: Int,
+    borderPixels: Int = 0
+): Boolean {
+    if (regionPixels <= 0 || selectedPixels < 0 || selectedPixels > regionPixels ||
+        borderPixels < 0 || borderPixels > selectedPixels) return false
     val fraction = selectedPixels.toFloat() / regionPixels.toFloat()
-    return fraction in 0.005f..0.28f
+    if (fraction !in 0.02f..0.28f) return false
+    // The ROI includes padding around the landmark-defined brow. Permit only a small
+    // rasterization fringe inside the outer two-pixel band.
+    return borderPixels <= max(2, (selectedPixels * 0.01f).toInt())
+}
+
+internal fun countBrowMaskBorderPixels(
+    mask: BooleanArray,
+    width: Int,
+    height: Int,
+    band: Int = 2
+): Int {
+    if (width <= 0 || height <= 0 || band <= 0 ||
+        width.toLong() * height.toLong() != mask.size.toLong()) {
+        return mask.count { it }
+    }
+    var count = 0
+    for (index in mask.indices) {
+        if (!mask[index]) continue
+        val x = index % width
+        val y = index / width
+        if (x < band || x >= width - band || y < band || y >= height - band) count++
+    }
+    return count
 }
 
 internal data class BrowSegmentationResult(
@@ -191,13 +219,15 @@ internal object BrowSegmentationEngine {
                 null
             }
             val modelPixels = modelMask?.count { it } ?: 0
-            // Accept model output only when its area is within a plausible eyebrow range.
-            // If it is weak or oversized, try the contrast fallback, then fail closed if
-            // that candidate is also implausible. A broad dark patch must never be treated
-            // as an eyebrow mask merely because the heuristic found pixels.
+            val modelBorderPixels = modelMask?.let {
+                countBrowMaskBorderPixels(it, roi.width, roi.height)
+            } ?: 0
+            // Accept model output only when its area and spatial extent are plausible.
+            // If it is weak, oversized or spills into the padded ROI frame, try the
+            // contrast fallback, then fail closed if that candidate is also implausible.
             val useModelMask = modelMask != null &&
                 modelPixels >= max(5, (modelMask.size * 0.02f).toInt()) &&
-                isPlausibleBrowMask(modelPixels, modelMask.size)
+                isPlausibleBrowMask(modelPixels, modelMask.size, modelBorderPixels)
             val candidateMask = if (useModelMask) {
                 modelAppliedRegions++
                 modelMask!!
@@ -205,8 +235,11 @@ internal object BrowSegmentationEngine {
                 adaptiveMask(roi, sensitivity)
             }
             val candidateCount = candidateMask.count { it }
+            val candidateBorderPixels = countBrowMaskBorderPixels(candidateMask, roi.width, roi.height)
             val candidateRatio = candidateCount.toFloat() / candidateMask.size.coerceAtLeast(1)
-            val acceptedMask = isPlausibleBrowMask(candidateCount, candidateMask.size)
+            val acceptedMask = isPlausibleBrowMask(
+                candidateCount, candidateMask.size, candidateBorderPixels
+            )
             if (!acceptedMask) rejectedRegions++
             val mask = if (acceptedMask) candidateMask else BooleanArray(candidateMask.size)
             val count = if (acceptedMask) candidateCount else 0
