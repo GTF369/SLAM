@@ -4554,9 +4554,9 @@ private object BrowRenderer {
         val workingPoints = if (curvatureFactors.isEmpty()) {
             ordered
         } else {
-            // Apply the dimensionless surface/chord factor along each complete 2D
-            // landmark segment. Scaling only dx distorts sloped eyebrow segments by
-            // changing width while leaving vertical displacement untouched.
+            // Scale each 2D segment to its measured skin-surface arc length after
+            // calibration by the current photo's projected segment and interpupillary distance.
+            // Scale both tangent coordinates so sloped segments keep their direction.
             val cumulative = mutableListOf(PointF(ordered.first().x, ordered.first().y))
             for (i in 0 until ordered.lastIndex) {
                 val rawFactor = curvatureFactors[segmentRegions[i]] ?: 1f
