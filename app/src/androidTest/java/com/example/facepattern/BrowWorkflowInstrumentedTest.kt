@@ -17,6 +17,7 @@ import androidx.test.uiautomator.UiScrollable
 import androidx.test.uiautomator.UiSelector
 import androidx.test.uiautomator.Until
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -81,6 +82,16 @@ class BrowWorkflowInstrumentedTest {
         val element: UiObject2? = device.findObject(By.text(text))
         assertNotNull("Cannot find visible text: $text", element)
         element!!.click()
+    }
+
+    @Test
+    fun browMaskAreaGateRejectsEmptyAndOversizedContours() {
+        assertTrue("A normal 10% brow ROI mask should be accepted", isPlausibleBrowMask(100, 1000))
+        assertTrue("The lower 0.5% boundary should be accepted", isPlausibleBrowMask(5, 1000))
+        assertTrue("The upper 28% boundary should be accepted", isPlausibleBrowMask(280, 1000))
+        assertFalse("An empty contour must be rejected", isPlausibleBrowMask(0, 1000))
+        assertFalse("A 33% dark patch must not be treated as an eyebrow", isPlausibleBrowMask(333, 1000))
+        assertFalse("Invalid region size must be rejected", isPlausibleBrowMask(0, 0))
     }
 
     @Test
