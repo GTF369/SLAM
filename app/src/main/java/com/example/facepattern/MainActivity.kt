@@ -4218,7 +4218,7 @@ private object BrowRecommendationEngine {
         hypot((a.x - b.x).toDouble(), (a.y - b.y).toDouble()).toFloat()
 }
 
-private class BrowDesignView(context: Context) : View(context) {
+internal class BrowDesignView(context: Context) : View(context) {
     private data class MaskStroke(val before: Map<Int, Int>, val after: Map<Int, Int>)
 
     private val maskUndoStack = mutableListOf<MaskStroke>()
