@@ -3579,7 +3579,7 @@ class MainActivity : AppCompatActivity() {
                 append(row.optInt("model_score", 0)).append(',')
                 append(if (row.isNull("predicted_probability")) "" else row.optDouble("predicted_probability").toString()).append(',')
                 append(row.optString("probability_type")).append(',')
-                append(if (row.isNull("aesthetic_rating")) "" else row.optDouble("aesthetic_rating").toString()).append('\\n')
+                append(if (row.isNull("aesthetic_rating")) "" else row.optDouble("aesthetic_rating").toString()).append('\n')
             }
         }
         val filename = "brow_preference_feedback_${System.currentTimeMillis()}.csv"
