@@ -97,6 +97,19 @@ def map_labels_to_roi(labels: np.ndarray, crop_left: int, crop_top: int, side: i
     return mask
 
 
+def border_pixel_count(mask: np.ndarray, band: int = 2) -> int:
+    """Count selected pixels in the two-pixel perimeter of a brow ROI."""
+    if mask.ndim != 2 or mask.size == 0 or band <= 0:
+        return int(np.count_nonzero(mask))
+    height, width = mask.shape
+    edge = np.zeros_like(mask, dtype=bool)
+    edge[:band, :] = True
+    edge[max(0, height - band):, :] = True
+    edge[:, :band] = True
+    edge[:, max(0, width - band):] = True
+    return int(np.count_nonzero(mask & edge))
+
+
 def adaptive_mask(roi: np.ndarray, sensitivity: float = 0.7884):
     rgb = roi.astype(np.float32)
     luma = (0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]).astype(np.int16)
@@ -215,18 +228,26 @@ def run_case(image_path: Path, case_name: str, landmarker, session, out_dir: Pat
         model_mask = map_labels_to_roi(labels, crop_left, crop_top, side, b)
         roi = image[y0:y1, x0:x1]
         model_count = int(model_mask.sum())
+        model_border_count = border_pixel_count(model_mask)
         minimum = max(5, int(model_mask.size * 0.02))
-        used_model = model_count >= minimum and is_plausible_brow_mask(model_count, model_mask.size)
+        used_model = (
+            model_count >= minimum
+            and is_plausible_brow_mask(model_count, model_mask.size, model_border_count)
+        )
         candidate = model_mask if used_model else adaptive_mask(roi)
         candidate_count = int(candidate.sum())
-        candidate_accepted = is_plausible_brow_mask(candidate_count, candidate.size)
-        # Fail closed: an empty or oversized contour is left for manual brush correction.
+        candidate_border_count = border_pixel_count(candidate)
+        candidate_accepted = is_plausible_brow_mask(
+            candidate_count, candidate.size, candidate_border_count
+        )
+        # Fail closed: sparse, oversized or ROI-border-leaking contours require manual correction.
         chosen = candidate if candidate_accepted else np.zeros_like(candidate, dtype=bool)
         final_mask[y0:y1, x0:x1] |= chosen
         report["roi_results"].append({
             "name": name, "bounds_xyxy": b, "roi_pixels": int(model_mask.size),
             "model_brow_pixels": model_count,
             "model_brow_fraction": round(float(model_count / max(1, model_mask.size)), 4),
+            "model_border_pixels": model_border_count,
             "model_mask_accepted_by_app_gate": bool(used_model),
             "selected_method": (
                 "EasyPortrait class 2/3" if used_model else
@@ -234,6 +255,7 @@ def run_case(image_path: Path, case_name: str, landmarker, session, out_dir: Pat
             ),
             "candidate_mask_pixels": candidate_count,
             "candidate_mask_fraction": round(float(candidate_count / max(1, candidate.size)), 4),
+            "candidate_border_pixels": candidate_border_count,
             "final_mask_accepted_by_area_gate": bool(candidate_accepted),
             "final_mask_pixels": int(chosen.sum()),
             "final_mask_fraction": round(float(chosen.mean()), 4),
