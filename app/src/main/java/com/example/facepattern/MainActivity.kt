@@ -90,7 +90,7 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
-private data class BrowParams(
+internal data class BrowParams(
     val thickness: Float = 1.0f,
     val length: Float = 1.0f,
     val arch: Float = 1.0f,
