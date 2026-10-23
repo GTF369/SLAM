@@ -1490,6 +1490,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun savePlan() {
+        // Freeze an in-progress morph before opening the name dialog so the saved plan
+        // is exactly the intermediate state the customer asked to keep.
+        stopTransition()
         if (capturedPhoto == null) return
         if (savedPlans.size >= 5) {
             Toast.makeText(this, "最多保存 5 套方案，请先对比并移除旧方案后再继续", Toast.LENGTH_LONG).show()
@@ -1571,6 +1574,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showComparison() {
+        stopTransition()
         val photo = capturedPhoto
         val points = browView.facePoints()
         if (photo == null || savedPlans.isEmpty()) {
@@ -1601,6 +1605,20 @@ class MainActivity : AppCompatActivity() {
                 textSize = 13f
                 setTextColor(Color.WHITE)
                 gravity = Gravity.CENTER
+            })
+            val parameterSummary = String.format(
+                java.util.Locale.getDefault(),
+                "粗细 ×%.2f  长度 ×%.2f\n弧度 ×%.2f",
+                plan.params.thickness,
+                plan.params.length,
+                plan.params.arch
+            )
+            column.addView(TextView(this).apply {
+                text = parameterSummary
+                textSize = 10f
+                setTextColor(0xFFD3D6DA.toInt())
+                gravity = Gravity.CENTER
+                setPadding(dp(2), dp(2), dp(2), dp(4))
             })
             column.addView(Button(this).apply {
                 text = "选用"

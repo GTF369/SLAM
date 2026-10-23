@@ -35,7 +35,7 @@ internal object BrowGeometryAdapter {
 
         return candidates.map { base ->
             base.copy(
-                thickness = (base.thickness - face * 0.04f + jaw * 0.025f + maskThin * 0.06f)
+                thickness = (base.thickness + face * 0.04f + jaw * 0.025f + maskThin * 0.06f)
                     .coerceIn(0.55f, 1.45f),
                 length = (base.length + face * 0.025f + eyes * 0.02f + jaw * 0.015f)
                     .coerceIn(0.80f, 1.20f),

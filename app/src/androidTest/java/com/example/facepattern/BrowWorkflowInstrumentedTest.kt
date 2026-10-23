@@ -616,6 +616,10 @@ class BrowWorkflowInstrumentedTest {
         assertEquals("All three styles must be retained", 3, broaderFace.size)
         assertTrue("Facial measurements should change the initial parameters",
             narrowerFace.indices.any { narrowerFace[it] != broaderFace[it] })
+        assertTrue("Broader face proportions should not automatically thin the preset brow",
+            broaderFace[0].thickness > narrowerFace[0].thickness)
+        assertTrue("Arch adjustment should respond consistently to width-to-height ratio",
+            broaderFace[0].arch > narrowerFace[0].arch)
         listOf(narrowerFace, broaderFace).flatten().forEach { candidate ->
             assertTrue("Thickness must stay within the editor's range",
                 candidate.thickness.isFinite() && candidate.thickness in 0.55f..1.45f)
