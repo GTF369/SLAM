@@ -46,6 +46,63 @@ REQUIRED = {
 }
 EXPECTED_STYLES = {"natural", "soft", "defined"}
 REGULARIZATION = 0.02
+CHOICE_INTERACTION_NAMES = [
+    "face_width_height_x_thickness",
+    "face_width_height_x_length",
+    "face_width_height_x_arch",
+    "interocular_ratio_x_thickness",
+    "interocular_ratio_x_arch",
+    "jaw_ratio_x_arch",
+    "brow_eye_distance_x_thickness",
+    "brow_eye_distance_x_arch",
+    "brow_asymmetry_x_arch",
+    "face_width_height_x_style_soft",
+    "face_width_height_x_style_defined",
+    "brow_eye_distance_x_style_soft",
+    "brow_eye_distance_x_style_defined",
+    "brow_asymmetry_x_style_soft",
+    "brow_asymmetry_x_style_defined",
+    "eye_line_tilt_x_style_soft",
+    "eye_line_tilt_x_style_defined",
+    "native_brow_area_fraction_x_thickness",
+    "native_brow_side_imbalance_x_thickness",
+    "native_brow_side_imbalance_x_arch",
+]
+CHOICE_FEATURE_NAMES = FEATURE_NAMES + CHOICE_INTERACTION_NAMES
+
+
+def expand_choice_features(base: np.ndarray) -> np.ndarray:
+    """Add face-by-candidate interactions so facial features do not cancel in softmax."""
+    values = np.asarray(base, dtype=np.float64)
+    if values.shape != (len(FEATURE_NAMES),):
+        raise ValueError(f"Expected {len(FEATURE_NAMES)} base features, got {values.shape}")
+    face_width, interocular, jaw, brow_eye, asymmetry, eye_tilt = values[:6]
+    thickness, length, arch = values[6:9]
+    style_soft, style_defined = values[9:11]
+    native_area, side_imbalance = values[11:13]
+    interactions = np.asarray([
+        face_width * thickness,
+        face_width * length,
+        face_width * arch,
+        interocular * thickness,
+        interocular * arch,
+        jaw * arch,
+        brow_eye * thickness,
+        brow_eye * arch,
+        asymmetry * arch,
+        face_width * style_soft,
+        face_width * style_defined,
+        brow_eye * style_soft,
+        brow_eye * style_defined,
+        asymmetry * style_soft,
+        asymmetry * style_defined,
+        eye_tilt * style_soft,
+        eye_tilt * style_defined,
+        native_area * thickness,
+        side_imbalance * thickness,
+        side_imbalance * arch,
+    ], dtype=np.float64)
+    return np.concatenate((values, interactions))
 
 
 def parse_selected(raw: str, *, source: str, row_num: int) -> bool:
@@ -87,7 +144,7 @@ def feature_row(row: dict[str, str], *, source: str, row_num: int) -> np.ndarray
         raise ValueError(f"{source} row {row_num} has out-of-range mask fractions.")
     if values[13] not in (0.0, 1.0) or values[14] not in (0.0, 1.0):
         raise ValueError(f"{source} row {row_num} must use 0/1 for mask availability and native-shape mode.")
-    return np.asarray(values, dtype=np.float64)
+    return expand_choice_features(np.asarray(values, dtype=np.float64))
 
 
 def build_choice_sessions(rows: list[dict[str, str]], source: str = "CSV") -> list[dict[str, Any]]:
@@ -364,7 +421,7 @@ def train_choice_model(
     return {
         "model_version": 1,
         "model_type": "conditional_choice",
-        "feature_order": FEATURE_NAMES,
+        "feature_order": CHOICE_FEATURE_NAMES,
         "means": means.tolist(),
         "scales": [float(v) if float(v) != 0.0 else 1.0 for v in scales],
         "coefficients": coefficients.tolist(),
