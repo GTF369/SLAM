@@ -169,6 +169,8 @@ class MainActivity : AppCompatActivity() {
     // Explicit style intent is a user preference, not an inferred personality attribute.
     private var selectedDesignIntent: Int = 0
     private val designIntentLabels = listOf("均衡自然", "偏柔和", "偏立体")
+    // Keep the exact rows currently displayed so feedback labels the viewed candidates.
+    private var currentDisplayedRecommendations: List<BrowRecommendation> = emptyList()
     private val history = mutableListOf<BrowParams>()
     private val savedPlans = mutableListOf<BrowPlan>()
     private var transitionAnimator: ValueAnimator? = null
@@ -1342,6 +1344,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun presentRecommendations(recommendations: List<BrowRecommendation>) {
+        currentDisplayedRecommendations = recommendations.toList()
         recommendationRow.removeAllViews()
         recommendations.forEach { recommendation ->
             val button = Button(this).apply {
@@ -3333,103 +3336,188 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+
     private fun recordPreference() {
         val points = browView.facePoints()
         if (capturedPhoto == null || points.size < 455) {
             Toast.makeText(this, "请先完成拍照和眉形设计", Toast.LENGTH_SHORT).show()
             return
         }
+
+        // Use the exact three candidates shown to the customer. A choice label is the
+        // customer's observed selection among these options, not a score-derived pseudo-label.
+        val displayedByStyle = currentDisplayedRecommendations.groupBy { it.params.style }
+            .mapValues { (_, rows) -> rows.last() }
+        val candidates = listOf(0, 1, 2).mapNotNull { displayedByStyle[it] }
+        if (candidates.size != 3) {
+            Toast.makeText(this, "未能确认自然款、柔和款和立体款三个候选，请重新生成推荐后再记录。", Toast.LENGTH_LONG).show()
+            return
+        }
+
         val anonymousClientCode = EditText(this).apply {
-            hint = "本次匿名顾客代码"
+            hint = "匿名顾客代码（同一顾客请重复使用同一随机代码）"
             isSingleLine = true
             setText(currentCaseId)
-            isEnabled = false
+            inputType = InputType.TYPE_CLASS_TEXT
         }
-        val ratingLabel = TextView(this).apply {
-            text = "顾客满意度：5 / 5"
-            textSize = 15f
+        val ratings = candidates.map { candidate ->
+            val label = TextView(this).apply {
+                text = "${candidate.name}满意度评分（必填）"
+                textSize = 14f
+                setPadding(0, dp(6), 0, 0)
+            }
+            val spinner = android.widget.Spinner(this).apply {
+                adapter = android.widget.ArrayAdapter(
+                    this@MainActivity,
+                    android.R.layout.simple_spinner_dropdown_item,
+                    listOf("请选择评分", "1 分", "2 分", "3 分", "4 分", "5 分")
+                )
+                setSelection(0, false)
+            }
+            label to spinner
         }
-        val ratingBar = SeekBar(this).apply {
-            max = 4
-            progress = 4
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
-                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    ratingLabel.text = "顾客满意度：${progress + 1} / 5"
-                }
+        val selectedGroup = android.widget.RadioGroup(this).apply {
+            orientation = android.widget.RadioGroup.VERTICAL
+        }
+        candidates.forEach { candidate ->
+            selectedGroup.addView(android.widget.RadioButton(this).apply {
+                id = 100 + candidate.params.style
+                text = candidate.name
+                isChecked = false
             })
         }
-        val selected = CheckBox(this).apply {
-            text = "顾客最终选择此方案"
+        val consent = CheckBox(this).apply {
+            text = "已取得顾客明确同意，将本次匿名几何特征、三个候选参数、评分和最终选择用于训练与验证推荐模型"
             isChecked = false
         }
-        val consent = CheckBox(this).apply {
-            text = "我已取得顾客同意，将匿名几何特征与本次偏好评分用于改进推荐模型"
-            isChecked = false
+        val note = TextView(this).apply {
+            text = "一次记录三款候选，系统写成同一会话的三行数据，并确保最终选择只标记一款。请勿填写姓名、电话、预约号等身份信息。不同意研究用途时请取消，设计功能不受影响。当前规则分或群体审美分不是适配概率。"
+            textSize = 12f
+            setPadding(0, 0, 0, dp(6))
         }
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(8), dp(20), 0)
-            addView(TextView(this@MainActivity).apply {
-                text = "记录的是匿名几何特征、方案参数和顾客反馈，不保存照片或身份信息。若本次比较了多套候选，请分别记录每套，所有候选会共享本次设计会话编号，且“顾客最终选择此方案”只勾选最终选中的一套。不同意时可以取消，设计功能不受影响。"
-                textSize = 13f
-            })
+            setPadding(dp(20), dp(4), dp(20), dp(4))
+            addView(note)
             addView(consent)
+            addView(TextView(this@MainActivity).apply {
+                text = "匿名顾客代码"
+                textSize = 13f
+                setPadding(0, dp(6), 0, 0)
+            })
             addView(anonymousClientCode)
-            addView(ratingLabel)
-            addView(ratingBar)
-            addView(selected)
+            ratings.forEach { (label, spinner) ->
+                addView(label)
+                addView(spinner)
+            }
+            addView(TextView(this@MainActivity).apply {
+                text = "顾客最终选择了哪一款？（必选一款）"
+                textSize = 14f
+                setPadding(0, dp(10), 0, dp(2))
+            })
+            addView(selectedGroup)
         }
-        AlertDialog.Builder(this)
-            .setTitle("记录顾客偏好")
-            .setView(form)
+        val scroll = ScrollView(this).apply { addView(form) }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("记录三款眉形的真实反馈")
+            .setView(scroll)
             .setNegativeButton("取消", null)
-            .setPositiveButton("保存反馈") { _, _ ->
-                val features = BrowRecommendationEngine.measurements(points, segmentationResult, segmentationReviewed, useNativeShape)
-                val dataset = org.json.JSONArray(
-                    getSharedPreferences("brow_preference_feedback", Context.MODE_PRIVATE).getString("records", "[]")
+            .setPositiveButton("保存三款反馈", null)
+            .create()
+        dialog.setOnShowListener {
+            val saveButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            fun updateSaveEnabled() {
+                saveButton.isEnabled = consent.isChecked &&
+                    ratings.all { (_, spinner) -> spinner.selectedItemPosition in 1..5 } &&
+                    selectedGroup.checkedRadioButtonId != -1 &&
+                    anonymousClientCode.text.toString().trim().isNotBlank()
+            }
+            saveButton.isEnabled = false
+            consent.setOnCheckedChangeListener { _, _ -> updateSaveEnabled() }
+            selectedGroup.setOnCheckedChangeListener { _, _ -> updateSaveEnabled() }
+            ratings.forEach { (_, spinner) ->
+                spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                    override fun onNothingSelected(parent: android.widget.AdapterView<*>?) { updateSaveEnabled() }
+                    override fun onItemSelected(
+                        parent: android.widget.AdapterView<*>?,
+                        view: View?,
+                        position: Int,
+                        id: Long
+                    ) { updateSaveEnabled() }
+                }
+            }
+            anonymousClientCode.addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { updateSaveEnabled() }
+                override fun afterTextChanged(s: Editable?) = Unit
+            })
+            updateSaveEnabled()
+            saveButton.setOnClickListener {
+                val rawCode = anonymousClientCode.text.toString().trim()
+                val safeCode = rawCode.filter { it.isLetterOrDigit() || it == '_' || it == '-' }.take(32)
+                if (safeCode.isBlank() || ratings.any { (_, spinner) -> spinner.selectedItemPosition !in 1..5 } ||
+                    selectedGroup.checkedRadioButtonId == -1 || !consent.isChecked) {
+                    Toast.makeText(this, "请填写匿名代码、完成三款评分、选择最终方案并确认授权。", Toast.LENGTH_LONG).show()
+                    return@setOnClickListener
+                }
+                val selectedStyle = selectedGroup.checkedRadioButtonId - 100
+                val features = BrowRecommendationEngine.measurements(
+                    points, segmentationResult, segmentationReviewed, useNativeShape
                 )
-                val consentedAnonymousId = anonymousClientCode.text.toString().trim()
-                    .filter { it.isLetterOrDigit() || it == '_' || it == '-' }
-                    .take(32)
-                    .ifBlank { currentCaseId }
-                val item = org.json.JSONObject().apply {
-                    put("case_id", consentedAnonymousId)
-                    put("session_id", currentDesignSessionId)
-                    put("style", when (params.style) { 1 -> "soft"; 2 -> "defined"; else -> "natural" })
-                    put("thickness", params.thickness.toDouble())
-                    put("length", params.length.toDouble())
-                    put("arch", params.arch.toDouble())
-                    put("rating", ratingBar.progress + 1)
-                    put("selected", selected.isChecked)
-                    put("face_width_height_ratio", features.widthHeightRatio.toDouble())
-                    put("interocular_face_width_ratio", features.interocularFaceWidthRatio.toDouble())
-                    put("jaw_face_width_ratio", features.jawFaceWidthRatio.toDouble())
-                    put("brow_eye_distance_ratio", features.browEyeDistanceRatio.toDouble())
-                    put("brow_asymmetry_ratio", features.browAsymmetryRatio.toDouble())
-                    put("eye_line_tilt", features.eyeLineTilt.toDouble())
-                    put("native_brow_area_fraction", features.nativeBrowAreaFraction.toDouble())
-                    put("native_brow_side_imbalance", features.nativeBrowSideImbalance.toDouble())
-                    put("native_brow_mask_available", features.nativeBrowMaskAvailable.toDouble())
-                    put("native_shape_mode", features.nativeShapeMode.toDouble())
-                    put("design_intent", designIntentLabels[selectedDesignIntent])
-                    put("timestamp", System.currentTimeMillis())
+                val prefs = getSharedPreferences("brow_preference_feedback", Context.MODE_PRIVATE)
+                val oldRows = org.json.JSONArray(prefs.getString("records", "[]"))
+                val retained = org.json.JSONArray()
+                // Re-saving a session replaces its old rows, avoiding six rows being mistaken for two sessions.
+                for (i in 0 until oldRows.length()) {
+                    val row = oldRows.optJSONObject(i) ?: continue
+                    if (row.optString("session_id") != currentDesignSessionId) retained.put(row)
                 }
-                dataset.put(item)
-                getSharedPreferences("brow_preference_feedback", Context.MODE_PRIVATE).edit()
-                    .putString("records", dataset.toString())
-                    .apply()
-                Toast.makeText(this, "已保存匿名偏好记录，可导出 CSV 用于后续模型训练", Toast.LENGTH_LONG).show()
-            }
-            .create().also { dialog ->
-                dialog.setOnShowListener {
-                    val saveButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
-                    saveButton.isEnabled = consent.isChecked
-                    consent.setOnCheckedChangeListener { _, checked -> saveButton.isEnabled = checked }
+                val timestamp = System.currentTimeMillis()
+                candidates.forEachIndexed { index, candidate ->
+                    val selectedRating = ratings[index].second.selectedItemPosition
+                    val styleName = when (candidate.params.style) {
+                        1 -> "soft"
+                        2 -> "defined"
+                        else -> "natural"
+                    }
+                    retained.put(org.json.JSONObject().apply {
+                        put("feedback_schema_version", 2)
+                        put("case_id", safeCode)
+                        put("session_id", currentDesignSessionId)
+                        put("style", styleName)
+                        put("candidate_name", candidate.name)
+                        put("thickness", candidate.params.thickness.toDouble())
+                        put("length", candidate.params.length.toDouble())
+                        put("arch", candidate.params.arch.toDouble())
+                        put("rating", selectedRating)
+                        put("selected", candidate.params.style == selectedStyle)
+                        put("model_score", candidate.score)
+                        put("predicted_probability", candidate.probability ?: org.json.JSONObject.NULL)
+                        put("probability_type", candidate.probabilityType ?: "")
+                        put("aesthetic_rating", candidate.aestheticRating ?: org.json.JSONObject.NULL)
+                        put("face_width_height_ratio", features.widthHeightRatio.toDouble())
+                        put("interocular_face_width_ratio", features.interocularFaceWidthRatio.toDouble())
+                        put("jaw_face_width_ratio", features.jawFaceWidthRatio.toDouble())
+                        put("brow_eye_distance_ratio", features.browEyeDistanceRatio.toDouble())
+                        put("brow_asymmetry_ratio", features.browAsymmetryRatio.toDouble())
+                        put("eye_line_tilt", features.eyeLineTilt.toDouble())
+                        put("native_brow_area_fraction", features.nativeBrowAreaFraction.toDouble())
+                        put("native_brow_side_imbalance", features.nativeBrowSideImbalance.toDouble())
+                        put("native_brow_mask_available", features.nativeBrowMaskAvailable.toDouble())
+                        put("native_shape_mode", features.nativeShapeMode.toDouble())
+                        put("design_intent", designIntentLabels[selectedDesignIntent])
+                        put("timestamp", timestamp)
+                    })
                 }
-                dialog.show()
+                prefs.edit().putString("records", retained.toString()).apply()
+                Toast.makeText(
+                    this, "已保存同一会话的三款匿名真实反馈。导出后可用于条件选择概率模型训练。",
+                    Toast.LENGTH_LONG
+                ).show()
+                dialog.dismiss()
             }
+        }
+        dialog.show()
     }
 
     private fun showModelLicenseNotice() {
@@ -3463,7 +3551,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val csv = buildString {
-            append("case_id,session_id,style,thickness,length,arch,rating,selected,face_width_height_ratio,interocular_face_width_ratio,jaw_face_width_ratio,brow_eye_distance_ratio,brow_asymmetry_ratio,eye_line_tilt,native_brow_area_fraction,native_brow_side_imbalance,native_brow_mask_available,native_shape_mode,timestamp,design_intent\n")
+            append("case_id,session_id,style,thickness,length,arch,rating,selected,face_width_height_ratio,interocular_face_width_ratio,jaw_face_width_ratio,brow_eye_distance_ratio,brow_asymmetry_ratio,eye_line_tilt,native_brow_area_fraction,native_brow_side_imbalance,native_brow_mask_available,native_shape_mode,timestamp,design_intent,feedback_schema_version,candidate_name,model_score,predicted_probability,probability_type,aesthetic_rating\n")
             for (i in 0 until records.length()) {
                 val row = records.optJSONObject(i) ?: continue
                 append(row.optString("case_id")).append(',')
@@ -3485,7 +3573,13 @@ class MainActivity : AppCompatActivity() {
                 append(row.optDouble("native_brow_mask_available")).append(',')
                 append(row.optDouble("native_shape_mode")).append(',')
                 append(row.optLong("timestamp")).append(',')
-                append(row.optString("design_intent", "均衡自然")).append('\n')
+                append(row.optString("design_intent", "均衡自然")).append(',')
+                append(row.optInt("feedback_schema_version", 1)).append(',')
+                append(row.optString("candidate_name")).append(',')
+                append(row.optInt("model_score", 0)).append(',')
+                append(if (row.isNull("predicted_probability")) "" else row.optDouble("predicted_probability").toString()).append(',')
+                append(row.optString("probability_type")).append(',')
+                append(if (row.isNull("aesthetic_rating")) "" else row.optDouble("aesthetic_rating").toString()).append('\\n')
             }
         }
         val filename = "brow_preference_feedback_${System.currentTimeMillis()}.csv"
