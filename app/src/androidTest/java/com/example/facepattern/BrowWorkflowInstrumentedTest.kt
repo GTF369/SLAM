@@ -1,6 +1,9 @@
 package com.example.facepattern
 
+import android.content.ContentValues
 import android.content.Intent
+import android.net.Uri
+import android.provider.MediaStore
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.SystemClock
@@ -52,6 +55,22 @@ class BrowWorkflowInstrumentedTest {
         assertNotNull(device.findObject(By.text(text)))
     }
 
+    private fun launchPublicPhoto(uri: Uri) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        device = UiDevice.getInstance(instrumentation)
+        val intent = Intent(instrumentation.targetContext, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            putExtra("com.example.facepattern.INSTRUMENTATION_TEST_MODE", true)
+            putExtra("com.example.facepattern.PUBLIC_PHOTO_URI", uri.toString())
+            putExtra("com.example.facepattern.TEST_RUN_SEGMENTATION", true)
+        }
+        instrumentation.startActivitySync(intent)
+        assertTrue(
+            "Main screen did not start for the public portrait",
+            device.wait(Until.hasObject(By.text("眉形设计助手")), TimeUnit.SECONDS.toMillis(10))
+        )
+    }
+
     private fun typeIntoOnlyDialogField(value: String) {
         val field = device.findObject(By.clazz("android.widget.EditText"))
         assertNotNull("Expected a text field in the dialog", field)
@@ -73,6 +92,52 @@ class BrowWorkflowInstrumentedTest {
         assertNotNull(device.findObject(By.text("导出加密案例")))
         assertNotNull(device.findObject(By.text("导入加密案例")))
         assertTrue(device.hasObject(By.text("仪器测试模式。相机未启动。")))
+    }
+
+    @Test
+    fun publicPortraitRunsThroughAndroidImportLandmarksAndBrowSegmentation() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val publicImageBytes = instrumentation.context.assets.open("public_portrait.jpg").use { it.readBytes() }
+        assertTrue("CI public portrait asset is empty", publicImageBytes.isNotEmpty())
+
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, "brow-ci-public.jpg")
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/BrowDesignTest")
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+        val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            ?: throw AssertionError("Unable to create temporary MediaStore image for Android import test")
+        try {
+            context.contentResolver.openOutputStream(uri, "w")?.use { output ->
+                output.write(publicImageBytes)
+                output.flush()
+            } ?: throw AssertionError("Unable to write test portrait to MediaStore")
+            val ready = ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
+            context.contentResolver.update(uri, ready, null, null)
+
+            launchPublicPhoto(uri)
+            // Some publicly sourced portraits trigger the ordinary quality warning. Accepting
+            // it is part of the production flow; the test never bypasses the image importer.
+            if (device.wait(Until.hasObject(By.text("仍然使用")), TimeUnit.SECONDS.toMillis(40))) {
+                clickText("仍然使用")
+            }
+
+            assertTrue(
+                "Imported public photo never produced a brow mask status in the Android app",
+                device.wait(Until.hasObject(By.textContains("识别方式：")), TimeUnit.SECONDS.toMillis(75))
+            )
+            val methodLabel = device.findObject(By.textContains("识别方式："))
+            assertNotNull("Expected the app to expose its segmentation method", methodLabel)
+            assertTrue(
+                "Segmentation status should include a quality report",
+                methodLabel!!.text.contains("掩膜质量提示")
+            )
+        } finally {
+            try { context.contentResolver.delete(uri, null, null) } catch (_: Exception) {}
+            publicImageBytes.fill(0)
+        }
     }
 
     @Test

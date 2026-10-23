@@ -52,6 +52,14 @@ jobs:
           echo "Downloaded faceparsing.onnx: ${actual_size} bytes"
           test "${actual_size}" -gt 10000000
           test "${actual_size}" -lt 20000000
+      - name: Download public portrait for Android import regression test
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/src/androidTest/assets
+          curl --fail --location --retry 3 --output app/src/androidTest/assets/public_portrait.jpg 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=1000&q=85'
+          file app/src/androidTest/assets/public_portrait.jpg
+          test -s app/src/androidTest/assets/public_portrait.jpg
       - name: Validate face parser model tensors and CPU inference
         run: |
           python -m pip install --quiet onnxruntime==1.23.2 numpy

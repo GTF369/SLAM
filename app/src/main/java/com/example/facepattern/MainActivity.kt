@@ -226,7 +226,12 @@ class MainActivity : AppCompatActivity() {
         // editing and encrypted case persistence without camera permissions or public photos.
         // Production launches never set these private extras.
         if (intent.getBooleanExtra("com.example.facepattern.INSTRUMENTATION_TEST_MODE", false)) {
-            if (intent.getBooleanExtra("com.example.facepattern.SYNTHETIC_DESIGN_MODE", false)) {
+            val publicPhotoUri = intent.getStringExtra("com.example.facepattern.PUBLIC_PHOTO_URI")
+            if (!publicPhotoUri.isNullOrBlank()) {
+                // CI stores a public portrait in the instrumentation APK, writes it to
+                // MediaStore, then passes its URI through the same production importer.
+                analyzeImportedPhoto(Uri.parse(publicPhotoUri))
+            } else if (intent.getBooleanExtra("com.example.facepattern.SYNTHETIC_DESIGN_MODE", false)) {
                 val (testPhoto, testLandmarks) = createInstrumentationPortrait()
                 enterDesignMode(testPhoto, testLandmarks)
             } else {
@@ -1287,10 +1292,14 @@ class MainActivity : AppCompatActivity() {
             "com.example.facepattern.INSTRUMENTATION_TEST_MODE", false
         )
         if (instrumentationMode) {
-            status.text = if (restoredCase != null) {
-                "仪器测试模式：本机案例已恢复，可继续编辑。"
-            } else {
-                "仪器测试模式：合成测试照片已加载。"
+            val publicPhotoMode = !intent.getStringExtra("com.example.facepattern.PUBLIC_PHOTO_URI").isNullOrBlank()
+            status.text = when {
+                restoredCase != null -> "仪器测试模式：本机案例已恢复，可继续编辑。"
+                publicPhotoMode -> "仪器测试模式：真实公开照片已导入。"
+                else -> "仪器测试模式：合成测试照片已加载。"
+            }
+            if (publicPhotoMode && intent.getBooleanExtra("com.example.facepattern.TEST_RUN_SEGMENTATION", false)) {
+                runSegmentation()
             }
         } else if (segmentationResult == null) {
             // New images start a fresh segmentation pass. Stored cases keep their reviewed
