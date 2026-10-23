@@ -92,7 +92,14 @@ class BrowWorkflowInstrumentedTest {
         assertFalse("An empty contour must be rejected", isPlausibleBrowMask(0, 1000))
         assertFalse("A 0.98% speck must not be treated as an eyebrow", isPlausibleBrowMask(64, 6534))
         assertFalse("A 33% dark patch must not be treated as an eyebrow", isPlausibleBrowMask(333, 1000))
+        assertTrue("A few border pixels should be tolerated", isPlausibleBrowMask(200, 1000, 2))
+        assertFalse("A mask leaking into the ROI border should be rejected", isPlausibleBrowMask(200, 1000, 20))
         assertFalse("Invalid region size must be rejected", isPlausibleBrowMask(0, 0))
+        val borderMask = BooleanArray(100)
+        for (y in 0 until 10) for (x in 0 until 10) {
+            if (x < 2 || y < 2 || x >= 8 || y >= 8) borderMask[y * 10 + x] = true
+        }
+        assertEquals("Border count must match the two-pixel ROI frame", 64, countBrowMaskBorderPixels(borderMask, 10, 10))
     }
 
     @Test
