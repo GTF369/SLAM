@@ -15,6 +15,13 @@ import kotlin.math.max
 import kotlin.math.min
 import org.tensorflow.lite.Interpreter
 
+/** Reject empty or implausibly large eyebrow masks instead of silently accepting them. */
+internal fun isPlausibleBrowMask(selectedPixels: Int, regionPixels: Int): Boolean {
+    if (regionPixels <= 0 || selectedPixels < 0 || selectedPixels > regionPixels) return false
+    val fraction = selectedPixels.toFloat() / regionPixels.toFloat()
+    return fraction in 0.005f..0.28f
+}
+
 internal data class BrowSegmentationResult(
     val overlay: Bitmap,
     val offsetX: Int,
@@ -183,23 +190,28 @@ internal object BrowSegmentationEngine {
                 null
             }
             val modelPixels = modelMask?.count { it } ?: 0
-            // A nearly empty model output can occur under makeup, harsh shadows or
-            // unusual lighting. Use the editable contrast mask instead of returning
-            // a blank eyebrow in that case.
+            // Accept model output only when its area is within a plausible eyebrow range.
+            // If it is weak or oversized, try the contrast fallback, then fail closed if
+            // that candidate is also implausible. A broad dark patch must never be treated
+            // as an eyebrow mask merely because the heuristic found pixels.
             val useModelMask = modelMask != null &&
-                modelPixels >= max(5, (modelMask.size * 0.003f).toInt())
-            val mask = if (useModelMask) {
+                modelPixels >= max(5, (modelMask.size * 0.005f).toInt()) &&
+                isPlausibleBrowMask(modelPixels, modelMask.size)
+            val candidateMask = if (useModelMask) {
                 modelAppliedRegions++
                 modelMask!!
             } else {
                 adaptiveMask(roi, sensitivity)
             }
-            val count = mask.count { it }
-            val ratio = count.toFloat() / mask.size.coerceAtLeast(1)
+            val candidateCount = candidateMask.count { it }
+            val candidateRatio = candidateCount.toFloat() / candidateMask.size.coerceAtLeast(1)
+            val acceptedMask = isPlausibleBrowMask(candidateCount, candidateMask.size)
+            val mask = if (acceptedMask) candidateMask else BooleanArray(candidateMask.size)
+            val ratio = if (acceptedMask) candidateRatio else 0f
             val localQuality = when {
+                !acceptedMask -> 0.15f
                 ratio in 0.02f..0.28f -> 0.82f
-                ratio in 0.005f..0.40f -> 0.58f
-                else -> 0.25f
+                else -> 0.58f
             }
             qualitySum += localQuality
             processedRegions++
