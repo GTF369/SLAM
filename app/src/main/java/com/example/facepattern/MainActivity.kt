@@ -3904,7 +3904,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (!designMode && landmarker == null &&
+        // Test-mode launches intentionally use synthetic landmarks or a supplied test
+        // image. Do not start the camera pipeline on resume, which would load a native
+        // MediaPipe library that may not exist in the x86_64 instrumentation APK.
+        val instrumentationTestMode = intent.getBooleanExtra(
+            "com.example.facepattern.INSTRUMENTATION_TEST_MODE", false
+        )
+        if (!instrumentationTestMode && !designMode && landmarker == null &&
             ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             startFaceTracking()
         }
