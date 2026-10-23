@@ -56,6 +56,8 @@ class SurfaceCompensationTests(unittest.TestCase):
                 )
                 self.assertLess(result["max_segment_error_mm"], 1e-8)
                 self.assertLess(result["absolute_total_length_error_mm"], 1e-8)
+                if result["raw_absolute_total_length_error_mm"] > 1e-3:
+                    self.assertGreater(result["relative_total_error_reduction"], 0.999999)
                 self.assertTrue(
                     all(MIN_COMPENSATION_FACTOR <= segment["factor"] <= MAX_COMPENSATION_FACTOR
                         for segment in result["segments"])
