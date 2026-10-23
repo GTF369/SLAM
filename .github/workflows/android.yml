@@ -103,7 +103,7 @@ jobs:
           arch: x86_64
           profile: pixel_2
           emulator-boot-timeout: 900
-          emulator-options: -no-window -gpu swiftshader_indirect -no-audio -no-boot-anim -no-snapshot -memory 4096 -cores 2
+          emulator-options: -no-window -gpu swiftshader_indirect -no-audio -no-boot-anim -no-snapshot -memory 2048 -cores 2
           disable-animations: true
           script: |
             set -eu
@@ -112,7 +112,7 @@ jobs:
             adb shell getprop sys.boot_completed
             adb logcat -c
             set +e
-            timeout 15m gradle --no-daemon clean connectedDebugAndroidTest -PemulatorSmoke=true
+            timeout 15m gradle --no-daemon connectedDebugAndroidTest -PemulatorSmoke=true
             status=$?
             set -e
             if [ "$status" -ne 0 ]; then
@@ -120,6 +120,7 @@ jobs:
               adb devices || true
               adb shell dumpsys activity activities || true
               adb logcat -d -s AndroidRuntime:E || true
+              adb logcat -d -b all -t 1500 | grep -Ei 'system_server|PackageManager|FATAL EXCEPTION|lowmemorykiller|lmkd|OutOfMemory' | tail -n 100 || true
               find app/build/outputs/androidTest-results app/build/reports/androidTests -maxdepth 5 -type f -print || true
               exit "$status"
             fi

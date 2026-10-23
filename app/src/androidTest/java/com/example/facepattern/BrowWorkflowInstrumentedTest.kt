@@ -597,4 +597,34 @@ class BrowWorkflowInstrumentedTest {
         scrollTo("CI方案_自然款")
         assertNotNull("Plan name did not survive case serialization", device.findObject(By.text("CI方案_自然款")))
     }
+    @Test
+    fun geometryAdapterPersonalizesInitialCandidatesWithinSafeParameterBounds() {
+        val base = listOf(
+            BrowParams(1.0f, 1.0f, 0.92f, 0),
+            BrowParams(0.82f, 0.94f, 0.72f, 1),
+            BrowParams(1.18f, 1.06f, 1.22f, 2)
+        )
+        val narrowerFace = BrowGeometryAdapter.personalizeCandidates(
+            base, 0.62f, 0.37f, 0.67f, 0.045f, 0.015f, -0.02f,
+            0.09f, 0.04f, 1f
+        )
+        val broaderFace = BrowGeometryAdapter.personalizeCandidates(
+            base, 0.86f, 0.44f, 0.84f, 0.085f, 0.015f, 0.03f,
+            0.21f, 0.20f, 1f
+        )
+        assertEquals("All three styles must be retained", 3, narrowerFace.size)
+        assertEquals("All three styles must be retained", 3, broaderFace.size)
+        assertTrue("Facial measurements should change the initial parameters",
+            narrowerFace.indices.any { narrowerFace[it] != broaderFace[it] })
+        listOf(narrowerFace, broaderFace).flatten().forEach { candidate ->
+            assertTrue("Thickness must stay within the editor's range",
+                candidate.thickness.isFinite() && candidate.thickness in 0.55f..1.45f)
+            assertTrue("Length must stay within the editor's range",
+                candidate.length.isFinite() && candidate.length in 0.80f..1.20f)
+            assertTrue("Arch must stay within the editor's range",
+                candidate.arch.isFinite() && candidate.arch in 0.55f..1.45f)
+        }
+        assertEquals(listOf(0, 1, 2), narrowerFace.map { it.style })
+    }
+
 }

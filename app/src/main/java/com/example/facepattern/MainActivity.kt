@@ -167,6 +167,8 @@ class MainActivity : AppCompatActivity() {
     private val history = mutableListOf<BrowParams>()
     private val savedPlans = mutableListOf<BrowPlan>()
     private var transitionAnimator: ValueAnimator? = null
+    // A longer default makes it practical to pause and compare gradual changes.
+    private var transitionDurationMs: Long = 4_000L
     private var useNativeShape = false
     private var segmentationResult: BrowSegmentationResult? = null
     private var showNativeSegmentation = false
@@ -460,6 +462,34 @@ class MainActivity : AppCompatActivity() {
             params = params.copy(arch = 0.55f + p / 100f * 0.90f)
             browView.setParams(params)
         }
+        val durationRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val durationLabel = TextView(this).apply {
+            text = "渐变时长 4 秒"
+            textSize = 12f
+            setTextColor(Color.WHITE)
+        }
+        durationRow.addView(durationLabel, LinearLayout.LayoutParams(dp(92), -2))
+        val durationSeek = SeekBar(this).apply {
+            max = 8
+            progress = 2
+            progressTintList = android.content.res.ColorStateList.valueOf(0xFFD5DDBF.toInt())
+            thumbTintList = android.content.res.ColorStateList.valueOf(0xFFD5DDBF.toInt())
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) {
+                        transitionDurationMs = (progress + 2L) * 1_000L
+                        durationLabel.text = "渐变时长 ${progress + 2} 秒"
+                    }
+                }
+            })
+        }
+        durationRow.addView(durationSeek, LinearLayout.LayoutParams(0, dp(38), 1f))
+        designControls.addView(durationRow)
         addButtonRow(designControls, listOf(
             "暂停 / 继续" to { toggleTransition() },
             "回撤一步" to { undoAdjustment() },
@@ -512,7 +542,7 @@ class MainActivity : AppCompatActivity() {
             "重新拍摄" to { retakePhoto() }
         ))
         val note = TextView(this).apply {
-            text = "打印前需实测瞳距。打印页附 20 mm 校准框，打印后务必量取确认。单张正面照不能可靠恢复眉弓三维曲率，本版不自动做三维曲面校正。"
+            text = "打印前需实测瞳距并复核 20 mm 校准框。可选的分区曲面补偿须先实测八个眉区的表面弧长。单张正面照不能自动恢复眉弓三维曲率，未经实际转印验证不应视为已验证精度。"
             textSize = 11f
             setTextColor(0xFFD5D7DC.toInt())
             setPadding(dp(2), dp(6), dp(2), 0)
@@ -1348,7 +1378,7 @@ class MainActivity : AppCompatActivity() {
         stopTransition()
         val from = params
         val animator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 900L
+            duration = transitionDurationMs
             interpolator = LinearInterpolator()
             addUpdateListener {
                 val t = it.animatedValue as Float
@@ -4156,11 +4186,31 @@ private object BrowRecommendationEngine {
         nativeShapeMode: Boolean
     ): List<BrowRecommendation> {
         val features = measurements(points, segmentation, maskReviewed, nativeShapeMode)
-        val templates = listOf(
-            BrowRecommendation("自然款", 82, BrowParams(1.0f, 1.0f, 0.92f, 0), "自然款：较保守的参数基线，仍需纹绣师确认"),
-            BrowRecommendation("柔和款", 78, BrowParams(0.82f, 0.94f, 0.72f, 1), "柔和款：较低粗细与弧度的参数预设"),
-            BrowRecommendation("立体款", 76, BrowParams(1.18f, 1.06f, 1.22f, 2), "立体款：较高粗细与弧度的参数预设")
+        val baseTemplates = listOf(
+            BrowRecommendation("自然款", 82, BrowParams(1.0f, 1.0f, 0.92f, 0), "自然款几何初稿"),
+            BrowRecommendation("柔和款", 78, BrowParams(0.82f, 0.94f, 0.72f, 1), "柔和款几何初稿"),
+            BrowRecommendation("立体款", 76, BrowParams(1.18f, 1.06f, 1.22f, 2), "立体款几何初稿")
         )
+        // Without a trained preference model, the initial contour still receives a
+        // bounded, explainable geometry adjustment. This is not a learned probability.
+        val adaptedParams = BrowGeometryAdapter.personalizeCandidates(
+            baseTemplates.map { it.params },
+            widthHeightRatio = features.widthHeightRatio,
+            interocularFaceWidthRatio = features.interocularFaceWidthRatio,
+            jawFaceWidthRatio = features.jawFaceWidthRatio,
+            browEyeDistanceRatio = features.browEyeDistanceRatio,
+            browAsymmetryRatio = features.browAsymmetryRatio,
+            eyeLineTilt = features.eyeLineTilt,
+            nativeBrowAreaFraction = features.nativeBrowAreaFraction,
+            nativeBrowSideImbalance = features.nativeBrowSideImbalance,
+            nativeBrowMaskAvailable = features.nativeBrowMaskAvailable
+        )
+        val templates = baseTemplates.mapIndexed { index, candidate ->
+            candidate.copy(
+                params = adaptedParams[index],
+                reason = "${candidate.name}：根据面部比例及已确认的原生眉区做了小幅几何适配。结果是可编辑初稿，不是经训练的概率预测。"
+            )
+        }
         val choiceModel = loadChoiceModel(context)
         if (choiceModel != null) {
             return rankWithChoiceModel(features, templates, choiceModel)
@@ -4216,11 +4266,31 @@ private object BrowRecommendationEngine {
             }.sortedByDescending { it.probability ?: it.score.toFloat() / 100f }
         }
         val shapeSignal = ((features.widthHeightRatio - 0.72f) / 0.18f).coerceIn(-1f, 1f)
+        val eyeSpacingSignal = ((features.interocularFaceWidthRatio - 0.40f) / 0.08f).coerceIn(-1f, 1f)
+        val jawSignal = ((features.jawFaceWidthRatio - 0.75f) / 0.15f).coerceIn(-1f, 1f)
+        val browGapSignal = ((features.browEyeDistanceRatio - 0.06f) / 0.04f).coerceIn(-1f, 1f)
+        val tiltSignal = (features.eyeLineTilt * 4f).coerceIn(-1f, 1f)
+        val maskImbalance = if (features.nativeBrowMaskAvailable >= 0.5f) {
+            features.nativeBrowSideImbalance.coerceIn(0f, 1f)
+        } else 0f
         val penalty = (features.browAsymmetryRatio * 35f).coerceIn(0f, 5f)
+        val naturalScore = 82f - abs(shapeSignal) * 3.5f - penalty
+        val softScore = 78f +
+            (-jawSignal).coerceAtLeast(0f) * 3.5f +
+            (-eyeSpacingSignal).coerceAtLeast(0f) * 2f +
+            browGapSignal.coerceAtLeast(0f) * 1.5f -
+            penalty * 0.6f
+        val definedScore = 76f +
+            jawSignal.coerceAtLeast(0f) * 3f +
+            eyeSpacingSignal.coerceAtLeast(0f) * 2f +
+            shapeSignal.coerceAtLeast(0f) * 2f +
+            tiltSignal.coerceAtLeast(0f) -
+            penalty * 0.4f -
+            maskImbalance * 2f
         return listOf(
-            templates[0].copy(score = (82f - abs(shapeSignal) * 3.5f - penalty).roundToInt().coerceIn(60, 95)),
-            templates[1].copy(score = (78f + (if (shapeSignal < 0f) -shapeSignal * 6f else -shapeSignal * 2f) - penalty * 0.6f).roundToInt().coerceIn(60, 95)),
-            templates[2].copy(score = (76f + (if (shapeSignal > 0f) shapeSignal * 7f else shapeSignal * 2f) - penalty * 0.4f).roundToInt().coerceIn(60, 95))
+            templates[0].copy(score = naturalScore.roundToInt().coerceIn(60, 95)),
+            templates[1].copy(score = softScore.roundToInt().coerceIn(60, 95)),
+            templates[2].copy(score = definedScore.roundToInt().coerceIn(60, 95))
         ).sortedByDescending { it.score }
     }
 
