@@ -3618,7 +3618,9 @@ class MainActivity : AppCompatActivity() {
         return factors
     }
 
-    // No single-image relative-z estimator participates in physical print geometry.\n\n    private fun printProfileSlug(raw: String): String = raw.trim().lowercase()
+    // No single-image relative-z estimator participates in physical print geometry.
+
+    private fun printProfileSlug(raw: String): String = raw.trim().lowercase()
         .map { if (it.isLetterOrDigit()) it else '_' }
         .joinToString("")
         .replace(Regex("_+"), "_")
@@ -4799,7 +4801,7 @@ private object BrowRenderer {
             } else {
                 intArrayOf(70, 63, 105, 66, 107)
             }
-            val sortedLandmarkX = browLandmarkIds.mapNotNull { landmarks.getOrNull(it)?.x }.sorted()
+            val sortedLandmarkX = browLandmarkIds.map { index -> landmarks.getOrNull(index)?.x }.filterNotNull().sorted()
             val cumulativeX = FloatArray(width)
             val cumulativeY = FloatArray(width)
             cumulativeX[0] = 0f
