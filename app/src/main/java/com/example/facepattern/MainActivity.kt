@@ -3570,7 +3570,7 @@ class MainActivity : AppCompatActivity() {
             intArrayOf(300, 293, 334, 296, 336)
         )
         for (ids in browSets) {
-            val ordered = ids.mapNotNull { points.getOrNull(it) }
+            val ordered = ids.map { index -> points.getOrNull(index) }.filterNotNull()
                 .filter { it.x.isFinite() && it.y.isFinite() }
                 .sortedBy { it.x }
             if (ordered.size != ids.size) continue
