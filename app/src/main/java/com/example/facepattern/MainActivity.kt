@@ -149,6 +149,8 @@ class MainActivity : AppCompatActivity() {
     private var imageExecutor: ExecutorService? = null
     private var captureInProgress = false
     private var currentCaseId: String = UUID.randomUUID().toString().take(8)
+    // Shared by every candidate feedback row generated during the current design session.
+    private var currentDesignSessionId: String = UUID.randomUUID().toString()
     private var activeStoredCaseId: String? = null
     private var activeStoredCaseName: String = ""
     private var pendingRestoredCase: RestoredBrowCase? = null
@@ -1225,6 +1227,9 @@ class MainActivity : AppCompatActivity() {
         normalizedDepths: List<Float> = emptyList()
     ) {
         stopTransition()
+        // Keep multiple candidate feedback rows linked to one choice task. Reopening or
+        // importing a design starts a new session while preserving the anonymous customer ID.
+        currentDesignSessionId = UUID.randomUUID().toString()
         val restoredCase = pendingRestoredCase
         pendingRestoredCase = null
         if (restoredCase != null) {
@@ -3192,7 +3197,7 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(8), dp(20), 0)
             addView(TextView(this@MainActivity).apply {
-                text = "记录的是匿名几何特征、方案参数和顾客反馈，不保存照片或身份信息。不同意时可以取消，设计功能不受影响。"
+                text = "记录的是匿名几何特征、方案参数和顾客反馈，不保存照片或身份信息。若本次比较了多套候选，请分别记录每套，所有候选会共享本次设计会话编号，且“顾客最终选择此方案”只勾选最终选中的一套。不同意时可以取消，设计功能不受影响。"
                 textSize = 13f
             })
             addView(consent)
@@ -3216,6 +3221,7 @@ class MainActivity : AppCompatActivity() {
                     .ifBlank { currentCaseId }
                 val item = org.json.JSONObject().apply {
                     put("case_id", consentedAnonymousId)
+                    put("session_id", currentDesignSessionId)
                     put("style", when (params.style) { 1 -> "soft"; 2 -> "defined"; else -> "natural" })
                     put("thickness", params.thickness.toDouble())
                     put("length", params.length.toDouble())
@@ -3281,10 +3287,11 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val csv = buildString {
-            append("case_id,style,thickness,length,arch,rating,selected,face_width_height_ratio,interocular_face_width_ratio,jaw_face_width_ratio,brow_eye_distance_ratio,brow_asymmetry_ratio,eye_line_tilt,native_brow_area_fraction,native_brow_side_imbalance,native_brow_mask_available,native_shape_mode,timestamp\n")
+            append("case_id,session_id,style,thickness,length,arch,rating,selected,face_width_height_ratio,interocular_face_width_ratio,jaw_face_width_ratio,brow_eye_distance_ratio,brow_asymmetry_ratio,eye_line_tilt,native_brow_area_fraction,native_brow_side_imbalance,native_brow_mask_available,native_shape_mode,timestamp\n")
             for (i in 0 until records.length()) {
                 val row = records.optJSONObject(i) ?: continue
                 append(row.optString("case_id")).append(',')
+                append(row.optString("session_id")).append(',')
                 append(row.optString("style")).append(',')
                 append(row.optDouble("thickness")).append(',')
                 append(row.optDouble("length")).append(',')
