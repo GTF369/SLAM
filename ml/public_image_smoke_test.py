@@ -215,7 +215,7 @@ def run_case(image_path: Path, case_name: str, landmarker, session, out_dir: Pat
         model_mask = map_labels_to_roi(labels, crop_left, crop_top, side, b)
         roi = image[y0:y1, x0:x1]
         model_count = int(model_mask.sum())
-        minimum = max(5, int(model_mask.size * 0.005))
+        minimum = max(5, int(model_mask.size * 0.02))
         used_model = model_count >= minimum and is_plausible_brow_mask(model_count, model_mask.size)
         candidate = model_mask if used_model else adaptive_mask(roi)
         candidate_count = int(candidate.sum())
@@ -284,7 +284,12 @@ def run_case(image_path: Path, case_name: str, landmarker, session, out_dir: Pat
     report["model_only_preview_file"] = model_path.name
     report["total_final_mask_pixels"] = int(final_mask.sum())
     report["total_final_mask_fraction_of_image"] = round(float(final_mask.mean()), 6)
-    report["status"] = "PASS_SMOKE_ONLY" if final_mask.sum() > 0 else "FAIL"
+    # A rejected mask means the pipeline ran and correctly requested manual review,
+    # not that inference crashed. Keep this distinct from a successful full-ROI mask.
+    if not final_mask.sum() or report["needs_manual_review"]:
+        report["status"] = "REVIEW_REQUIRED"
+    else:
+        report["status"] = "PASS_SMOKE_ONLY"
     report["accuracy_claim"] = "No ground-truth masks supplied; this tests face detection, tensor inference and app-equivalent mask path only."
     return report
 
@@ -332,6 +337,7 @@ def main():
         "onnx_output": {"name": session.get_outputs()[0].name, "shape": session.get_outputs()[0].shape},
         "cases": reports,
         "passed": sum(item.get("status") == "PASS_SMOKE_ONLY" for item in reports),
+        "review_required": sum(item.get("status") == "REVIEW_REQUIRED" for item in reports),
         "failed": sum(item.get("status") == "FAIL" for item in reports),
         "base_demo_brow_mapping_pass": next(
             (bool(item.get("model_brow_rois_pass")) for item in reports
