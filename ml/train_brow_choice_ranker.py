@@ -13,6 +13,7 @@ import argparse
 import csv
 import json
 import math
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,10 @@ from typing import Any
 import numpy as np
 from scipy.optimize import minimize, minimize_scalar
 from sklearn.preprocessing import StandardScaler
+
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
 
 from train_brow_ranker import FEATURE_NAMES, geometric_reference_scores
 
@@ -247,12 +252,14 @@ def _cluster_bootstrap_gain(
         baseline = geometric_reference_scores(session["x"])
         baseline_correct = int(int(np.argmax(baseline)) == int(session["choice"]))
         grouped.setdefault(session["case_id"], []).append(float(candidate_correct - baseline_correct))
-    customers = list(grouped)
+    customer_mean_gain = {customer: float(np.mean(gains)) for customer, gains in grouped.items()}
+    customers = list(customer_mean_gain)
     rng = np.random.default_rng(seed)
     values: list[float] = []
     for _ in range(draws):
         sampled = rng.choice(customers, size=len(customers), replace=True)
-        values.append(float(np.mean([v for customer in sampled for v in grouped[customer]])))
+        # Weight each customer equally, even when they have multiple design sessions.
+        values.append(float(np.mean([customer_mean_gain[customer] for customer in sampled])))
     return {
         "top1_gain_ci95_low": float(np.quantile(values, 0.025)),
         "top1_gain_ci95_high": float(np.quantile(values, 0.975)),
