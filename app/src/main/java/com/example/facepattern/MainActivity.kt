@@ -151,6 +151,8 @@ class MainActivity : AppCompatActivity() {
     private var currentCaseId: String = UUID.randomUUID().toString().take(8)
     // Shared by every candidate feedback row generated during the current design session.
     private var currentDesignSessionId: String = UUID.randomUUID().toString()
+    // Incremented on every recommendation refresh so stale background model results are ignored.
+    private var aestheticScoringGeneration: Int = 0
     private var activeStoredCaseId: String? = null
     private var activeStoredCaseName: String = ""
     private var pendingRestoredCase: RestoredBrowCase? = null
@@ -1269,18 +1271,76 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshRecommendations(points: List<PointF>) {
-        recommendationRow.removeAllViews()
         val ranked = BrowRecommendationEngine.rank(
             this, points, segmentationResult, segmentationReviewed, useNativeShape,
             preferredStyle = selectedDesignIntent
         )
-        recommendationLabel.text = BrowRecommendationEngine.sourceLabel(this) +
-            "\n当前风格倾向：${designIntentLabels[selectedDesignIntent]}。倾向可随时修改，最终仍由顾客与设计师确认。"
-        ranked.forEach { recommendation ->
+        val hasValidatedPreferenceModel = BrowRecommendationEngine.hasApprovedModel(this)
+        val usePopulationAestheticPrior = !hasValidatedPreferenceModel &&
+            BrowAestheticPrior.isAvailable(this) && capturedPhoto != null && points.size >= 455
+        val styleText = "\n当前风格倾向：${designIntentLabels[selectedDesignIntent]}。倾向可随时修改，最终仍由顾客与设计师确认。"
+        recommendationLabel.text = when {
+            hasValidatedPreferenceModel -> BrowRecommendationEngine.sourceLabel(this) + styleText
+            usePopulationAestheticPrior -> "正在计算三个候选的群体审美参考分（不是顾客选择概率）。" + styleText
+            else -> BrowRecommendationEngine.sourceLabel(this) + styleText
+        }
+        presentRecommendations(ranked)
+
+        // Do not let a population-level facial-attractiveness model overwrite a genuine
+        // independently validated customer-choice or high-rating model.
+        val generation = ++aestheticScoringGeneration
+        if (!usePopulationAestheticPrior) return
+        val sessionSnapshot = currentDesignSessionId
+        val pointSnapshot = points.map { PointF(it.x, it.y) }
+        val rendered = ranked.mapNotNull { recommendation ->
+            browView.renderCandidateBitmap(recommendation.params)?.let { recommendation to it }
+        }
+        if (rendered.size != ranked.size) {
+            rendered.forEach { (_, bitmap) -> if (!bitmap.isRecycled) bitmap.recycle() }
+            recommendationLabel.text = "无法完整渲染候选，已退回规则参考分。" + styleText
+            return
+        }
+
+        Thread({
+            val scored = rendered.mapNotNull { (recommendation, bitmap) ->
+                try {
+                    val rating = BrowAestheticPrior.score(applicationContext, bitmap, pointSnapshot)
+                    rating?.let {
+                        recommendation.copy(
+                            score = (it / 5f * 100f).roundToInt().coerceIn(0, 100),
+                            reason = "群体审美模型预测整脸平均人评为 ${String.format(java.util.Locale.US, "%.2f", it)} / 5。该模型不具备顾客选择概率或眉形适配概率的验证。",
+                            probability = null,
+                            probabilityType = "population_aesthetic",
+                            choiceLogit = null,
+                            aestheticRating = it
+                        )
+                    }
+                } finally {
+                    if (!bitmap.isRecycled) bitmap.recycle()
+                }
+            }.sortedByDescending { it.aestheticRating ?: 0f }
+            runOnUiThread {
+                if (generation != aestheticScoringGeneration ||
+                    sessionSnapshot != currentDesignSessionId || isFinishing || isDestroyed) return@runOnUiThread
+                if (scored.size == ranked.size) {
+                    recommendationLabel.text = BrowAestheticPrior.sourceLabel() + styleText
+                    presentRecommendations(scored)
+                } else {
+                    recommendationLabel.text = "群体审美模型推理未能完成全部候选，当前仍显示规则参考分。" + styleText
+                    presentRecommendations(ranked)
+                }
+            }
+        }, "BrowAestheticRanking").start()
+    }
+
+    private fun presentRecommendations(recommendations: List<BrowRecommendation>) {
+        recommendationRow.removeAllViews()
+        recommendations.forEach { recommendation ->
             val button = Button(this).apply {
                 text = when (recommendation.probabilityType) {
                     "conditional_choice" -> "${recommendation.name}\n本组选择概率 ${String.format(java.util.Locale.getDefault(), "%.1f", (recommendation.probability ?: 0f) * 100f)}%"
                     "high_rating" -> "${recommendation.name}\n获得 4–5 分概率 ${String.format(java.util.Locale.getDefault(), "%.1f", (recommendation.probability ?: 0f) * 100f)}%"
+                    "population_aesthetic" -> "${recommendation.name}\n群体审美参考 ${String.format(java.util.Locale.getDefault(), "%.2f", recommendation.aestheticRating ?: 0f)} / 5"
                     else -> "${recommendation.name}\n规则参考分 ${recommendation.score}"
                 }
                 textSize = 11f
@@ -4120,7 +4180,8 @@ private data class BrowRecommendation(
     // Present only when a separately calibrated and reviewed probability model is loaded.
     val probability: Float? = null,
     val probabilityType: String? = null,
-    val choiceLogit: Float? = null
+    val choiceLogit: Float? = null,
+    val aestheticRating: Float? = null
 )
 
 private data class BrowFaceMeasurements(
@@ -4759,6 +4820,31 @@ internal class BrowDesignView(context: Context) : View(context) {
     fun setParams(newParams: BrowParams) {
         params = newParams
         invalidate()
+    }
+
+    /** Render an independent full-resolution face image with a candidate brow overlay. */
+    fun renderCandidateBitmap(candidateParams: BrowParams): Bitmap? {
+        val image = photo ?: return null
+        if (image.isRecycled || points.size < 455) return null
+        return try {
+            val rendered = Bitmap.createBitmap(image.width, image.height, Bitmap.Config.ARGB_8888)
+            val candidateCanvas = Canvas(rendered)
+            candidateCanvas.drawBitmap(
+                image, 0f, 0f,
+                Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+            )
+            if (useNativeShape && nativeContours.isNotEmpty()) {
+                BrowRenderer.drawNativeContours(
+                    candidateCanvas, nativeContours, points, candidateParams,
+                    scale = 1f, imageLeft = 0f, imageTop = 0f
+                )
+            } else {
+                BrowRenderer.drawBrows(candidateCanvas, points, candidateParams)
+            }
+            rendered
+        } catch (_: Exception) {
+            null
+        }
     }
 
     override fun onDraw(canvas: Canvas) {

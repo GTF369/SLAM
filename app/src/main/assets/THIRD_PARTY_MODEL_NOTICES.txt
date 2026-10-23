@@ -17,3 +17,10 @@ Third-party model notices for Brow Design Assistant (self-use prototype)
    The model is downloaded by the build workflow from Google's published MediaPipe model storage. Review the current MediaPipe and model-card terms for your intended use.
 
 The app performs inference locally. Inclusion of a model file does not mean that model performance has been validated for eyebrow embroidery, all skin tones, makeup, lighting conditions, or all Android devices. Review and correct the eyebrow mask manually before use.
+
+3) SCUT-FBP5500 ResNet-50 population aesthetic prior
+   File: brow_aesthetic_resnet50.onnx (exported during the APK build from beauty_regressor.pt)
+   Source model: https://huggingface.co/evanlyhf/scut-fbp5500-beauty
+   It predicts a whole-face averaged human-attractiveness rating from the SCUT-FBP5500 dataset.
+   The model card lists the licence as "other", limits intended use to research and education, and says the dataset terms apply. The official SCUT-FBP5500 repository states that the dataset is for non-commercial research only.
+   This optional model is for private, non-commercial self-use/research only. It does not predict individual customer choice or eyebrow suitability. Do not redistribute or commercially use it without checking upstream terms and obtaining any necessary permissions.
