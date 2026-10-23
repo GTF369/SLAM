@@ -3611,9 +3611,13 @@ class MainActivity : AppCompatActivity() {
             val projectedSegmentPx = projectedBrowSegmentPixels(points, region) ?: continue
             if (!surfaceArcMm.isFinite() || surfaceArcMm <= 0f ||
                 !projectedSegmentPx.isFinite() || projectedSegmentPx < 2f) continue
-            val projectedSegmentMm = projectedSegmentPx / pupilDistancePx * interpupillaryDistanceMm
-            if (!projectedSegmentMm.isFinite() || projectedSegmentMm <= 0f) continue
-            factors[region] = surfaceArcMm / projectedSegmentMm
+            val factor = BrowSurfaceCompensation.factorFromMeasurements(
+                measuredSurfaceArcMm = surfaceArcMm,
+                projectedSegmentPixels = projectedSegmentPx,
+                pupilDistancePixels = pupilDistancePx,
+                measuredInterpupillaryDistanceMm = interpupillaryDistanceMm
+            ) ?: continue
+            factors[region] = factor
         }
         return factors
     }
