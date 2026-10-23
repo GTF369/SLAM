@@ -87,6 +87,59 @@ class BrowWorkflowInstrumentedTest {
     }
 
     @Test
+    fun measuredSurfaceCompensationUsesPhotoScaleAndRejectsInvalidFactors() {
+        val projectedMm = BrowSurfaceCompensation.projectedSegmentMillimetres(
+            projectedSegmentPixels = 100f,
+            pupilDistancePixels = 630f,
+            measuredInterpupillaryDistanceMm = 63f
+        )
+        assertNotNull("Calibrated projected segment should be valid", projectedMm)
+        assertEquals(10f, projectedMm!!, 1e-5f)
+
+        val factor = BrowSurfaceCompensation.factorFromMeasurements(
+            measuredSurfaceArcMm = 12f,
+            projectedSegmentPixels = 100f,
+            pupilDistancePixels = 630f,
+            measuredInterpupillaryDistanceMm = 63f
+        )
+        assertNotNull("Measured surface arc should produce a valid factor", factor)
+        assertEquals(1.2f, factor!!, 1e-5f)
+
+        assertEquals(0.75f, BrowSurfaceCompensation.factorFromMeasurements(
+            7.5f, 100f, 630f, 63f
+        )!!, 1e-5f)
+        assertEquals(1.6f, BrowSurfaceCompensation.factorFromMeasurements(
+            16f, 100f, 630f, 63f
+        )!!, 1e-5f)
+        assertEquals(null, BrowSurfaceCompensation.factorFromMeasurements(
+            16.1f, 100f, 630f, 63f
+        ))
+        assertEquals(null, BrowSurfaceCompensation.factorFromMeasurements(
+            0f, 100f, 630f, 63f
+        ))
+        assertEquals(null, BrowSurfaceCompensation.factorFromMeasurements(
+            12f, 1f, 630f, 63f
+        ))
+        assertEquals(null, BrowSurfaceCompensation.factorFromMeasurements(
+            12f, 100f, 630f, Float.NaN
+        ))
+
+        val regions = setOf("左眉头", "左眉身", "左眉峰", "左眉尾")
+        assertTrue(BrowSurfaceCompensation.validateCompleteFactors(
+            mapOf("左眉头" to 1.1f, "左眉身" to 1.2f, "左眉峰" to 1.0f, "左眉尾" to 1.3f),
+            regions
+        ))
+        assertFalse(BrowSurfaceCompensation.validateCompleteFactors(
+            mapOf("左眉头" to 1.1f, "左眉身" to 1.2f, "左眉峰" to 1.0f),
+            regions
+        ))
+        assertFalse(BrowSurfaceCompensation.validateCompleteFactors(
+            mapOf("左眉头" to 1.1f, "左眉身" to 1.61f, "左眉峰" to 1.0f, "左眉尾" to 1.3f),
+            regions
+        ))
+    }
+
+    @Test
     fun browMaskAreaGateRejectsEmptyAndOversizedContours() {
         assertTrue("A normal 10% brow ROI mask should be accepted", isPlausibleBrowMask(100, 1000))
         assertTrue("The lower 2% boundary should be accepted", isPlausibleBrowMask(20, 1000))
