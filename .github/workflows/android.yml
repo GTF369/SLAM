@@ -85,13 +85,17 @@ jobs:
           path: /tmp/face-pattern-oppo/app-debug.apk
           if-no-files-found: error
           retention-days: 14
+      - name: Compile Android instrumentation tests without requiring an emulator
+        run: gradle --no-daemon assembleDebugAndroidTest
       - name: Run case-library and mask-edit tests on an x86_64 Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 34
           target: google_apis
           arch: x86_64
           profile: pixel_2
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -gpu swiftshader_indirect -no-audio -no-boot-anim -no-snapshot -memory 4096 -cores 2
           disable-animations: true
           script: |
             set -euo pipefail
