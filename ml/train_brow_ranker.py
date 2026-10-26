@@ -47,6 +47,9 @@ FEATURE_NAMES = [
     "design_intent_defined_x_style_soft",
     "design_intent_defined_x_style_defined",
 ]
+# The conditional-choice model must continue to consume only these 15 base features.
+# FEATURE_NAMES below remains the 19-feature schema for the binary high-fit model.
+BASE_FEATURE_NAMES = FEATURE_NAMES[:15]
 DESIGN_INTENT_INDEX = {
     "均衡自然": 0,
     "偏柔和": 1,

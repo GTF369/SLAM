@@ -26,7 +26,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from train_brow_ranker import FEATURE_NAMES, geometric_reference_scores
+from train_brow_ranker import BASE_FEATURE_NAMES as FEATURE_NAMES, geometric_reference_scores
 
 FEATURE_COLUMNS = {
     "face_width_height_ratio",
