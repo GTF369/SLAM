@@ -113,8 +113,9 @@ jobs:
           target: default
           arch: x86_64
           profile: pixel_2
-          emulator-boot-timeout: 900
-          emulator-options: -no-window -gpu swiftshader_indirect -no-audio -no-boot-anim -no-snapshot -memory 4096 -cores 4
+          emulator-boot-timeout: 1200
+          # GitHub-hosted runners have limited CPU/RAM; avoid overcommitting the guest.
+          emulator-options: -no-window -gpu swiftshader_indirect -no-audio -no-boot-anim -no-snapshot -memory 2048 -cores 2
           disable-animations: true
           script: |
             set -eu
