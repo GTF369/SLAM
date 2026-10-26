@@ -44,7 +44,7 @@ FEATURE_NAMES = [
     "native_shape_mode",
 ]
 REQUIRED = {
-    "case_id", "style", "thickness", "length", "arch", "rating",
+    "case_id", "style", "thickness", "length", "arch", "rating", "feedback_schema_version",
     "face_width_height_ratio", "interocular_face_width_ratio",
     "jaw_face_width_ratio", "brow_eye_distance_ratio",
     "brow_asymmetry_ratio", "eye_line_tilt",
@@ -61,6 +61,22 @@ def read_rows(path: Path) -> list[dict[str, Any]]:
     missing = REQUIRED.difference(rows[0].keys())
     if missing:
         raise ValueError(f"{path} is missing columns: " + ", ".join(sorted(missing)))
+    # Older schemas recorded general satisfaction. Never relabel these rows as
+    # explicit eyebrow-fit ratings; v3 defines 1=not suitable, 5=very suitable.
+    stale_rows = []
+    for row_num, row in enumerate(rows, start=2):
+        try:
+            schema_version = int(row.get("feedback_schema_version", "0"))
+        except (TypeError, ValueError):
+            schema_version = 0
+        if schema_version < 3:
+            stale_rows.append(row_num)
+    if stale_rows:
+        raise ValueError(
+            f"{path} contains {len(stale_rows)} v1/v2 or unversioned rows. "
+            "This high-fit-rating model requires feedback_schema_version >= 3 "
+            "with explicit eyebrow-fit ratings. Export a new consented CSV from the app."
+        )
     return rows
 
 
