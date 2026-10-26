@@ -42,14 +42,26 @@ FEATURE_NAMES = [
     "native_brow_side_imbalance",
     "native_brow_mask_available",
     "native_shape_mode",
+    "design_intent_soft_x_style_soft",
+    "design_intent_soft_x_style_defined",
+    "design_intent_defined_x_style_soft",
+    "design_intent_defined_x_style_defined",
 ]
+DESIGN_INTENT_INDEX = {
+    "均衡自然": 0,
+    "偏柔和": 1,
+    "偏立体": 2,
+    "balanced_natural": 0,
+    "soft": 1,
+    "defined": 2,
+}
 REQUIRED = {
     "case_id", "style", "thickness", "length", "arch", "rating", "feedback_schema_version",
     "face_width_height_ratio", "interocular_face_width_ratio",
     "jaw_face_width_ratio", "brow_eye_distance_ratio",
     "brow_asymmetry_ratio", "eye_line_tilt",
     "native_brow_area_fraction", "native_brow_side_imbalance",
-    "native_brow_mask_available", "native_shape_mode",
+    "native_brow_mask_available", "native_shape_mode", "design_intent",
 }
 
 
@@ -78,6 +90,25 @@ def read_rows(path: Path) -> list[dict[str, Any]]:
             "with explicit eyebrow-fit ratings. Export a new consented CSV from the app."
         )
     return rows
+
+
+def expand_fit_features(base_values: list[float] | np.ndarray, design_intent: str) -> list[float]:
+    """Return the version-4 high-fit feature vector, including explicit intent/style interactions."""
+    values = [float(v) for v in base_values]
+    if len(values) != 15:
+        raise ValueError(f"Expected 15 base features, got {len(values)}")
+    if design_intent not in DESIGN_INTENT_INDEX:
+        raise ValueError(f"Unknown or missing design_intent {design_intent!r}")
+    intent = DESIGN_INTENT_INDEX[design_intent]
+    intent_soft = 1.0 if intent == 1 else 0.0
+    intent_defined = 1.0 if intent == 2 else 0.0
+    values.extend([
+        intent_soft * values[9],
+        intent_soft * values[10],
+        intent_defined * values[9],
+        intent_defined * values[10],
+    ])
+    return values
 
 
 def build_matrix(rows: list[dict[str, Any]], source: str = "CSV"):
@@ -116,6 +147,12 @@ def build_matrix(rows: list[dict[str, Any]], source: str = "CSV"):
             native_mask_available,
             native_shape_mode,
         ]
+        intent_label = str(row.get("design_intent", "")).strip()
+        if intent_label not in DESIGN_INTENT_INDEX:
+            raise ValueError(
+                f"{source} row {row_num} has unknown or missing design_intent {intent_label!r}."
+            )
+        values = expand_fit_features(values, intent_label)
         if not all(math.isfinite(v) for v in values):
             raise ValueError(f"{source} row {row_num} contains NaN or infinity.")
         if not (0.0 <= native_area <= 1.0 and 0.0 <= native_side_imbalance <= 1.0):
@@ -347,7 +384,9 @@ def main() -> None:
         release_approved = bool(args.mark_reviewed_after_human_review and all(gates.values()))
 
     payload = {
-        "model_version": 3,
+        "model_version": 4,
+        "model_type": "high_fit_rating",
+        "target_label": "explicit_eyebrow_fit_rating_ge_4",
         "feature_order": FEATURE_NAMES,
         "means": [float(v) for v in scaler.mean_],
         "scales": [float(v) if float(v) != 0.0 else 1.0 for v in scaler.scale_],

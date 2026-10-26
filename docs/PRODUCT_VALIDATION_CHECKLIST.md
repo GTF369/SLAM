@@ -9,7 +9,7 @@ Use this list to distinguish code completion, automated tests, device testing an
 - [ ] Keep development, calibration and external validation customers disjoint.
 - [ ] Compare against a fixed geometry-rule baseline and report case-level Top 1/Top 3 preference, ROC AUC, Brier score, calibration error and uncertainty. For brow-segmentation model promotion, require both pooled-pixel Dice and equal-weighted customer-macro Dice to pass the configured threshold.
 - [ ] Check relevant subgroups and capture conditions, including lighting, makeup, brow density, asymmetry and different face proportions.
-- [ ] Never call geometry-rule reference scores probabilities. The app only displays percentage preference estimates for a version-3 model that has separate calibration, passing external metrics and an explicit human-review approval flag.
+- [ ] Never call geometry-rule reference scores probabilities. The app only displays percentage estimates for a version-4 calibrated high-fit model or version-2 calibrated conditional-choice model, after external validation and explicit human review.
 - [ ] The current script's 30 development / 50 calibration / 100 external-customer minimums and metric thresholds are engineering screens, not statistical guarantees. Determine final sample size from the intended claims and expected error bounds.
 
 ## B. Natural eyebrow segmentation

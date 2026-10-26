@@ -22,15 +22,15 @@ from train_brow_ranker import build_matrix, calibration_metrics, fit_base_model,
 
 FEATURE_MEANS = np.asarray([
     0.78, 0.38, 0.80, 0.055, 0.025, 0.0, 1.0, 1.0, 1.0,
-    0.0, 0.0, 0.12, 0.04, 0.85, 0.5,
+    0.0, 0.0, 0.12, 0.04, 0.85, 0.5, 0.10, 0.10, 0.10, 0.10,
 ])
 FEATURE_SCALES = np.asarray([
     0.08, 0.05, 0.12, 0.02, 0.02, 0.08, 0.25, 0.15, 0.25,
-    1.0, 1.0, 0.07, 0.03, 0.35, 0.5,
+    1.0, 1.0, 0.07, 0.03, 0.35, 0.5, 0.30, 0.30, 0.30, 0.30,
 ])
 SYNTHETIC_WEIGHTS = np.asarray([
     0.55, -0.35, 0.25, -0.20, -0.90, 0.15, 0.75, -0.40, 0.70,
-    -0.55, 0.55, 0.20, -0.30, 0.25, 0.15,
+    -0.55, 0.55, 0.20, -0.30, 0.25, 0.15, 0.45, -0.25, -0.20, 0.45,
 ])
 
 
@@ -56,6 +56,10 @@ def make_synthetic_rows(case_count: int, prefix: str, seed: int) -> tuple[list[d
         side_imbalance = float(np.clip(rng.normal(0.04, 0.025), 0.0, 0.18))
         mask_available = float(rng.random() < 0.82)
         native_shape_mode = float(rng.random() < 0.45)
+        design_intent = int(rng.integers(0, 3))
+        design_intent_label = ("均衡自然", "偏柔和", "偏立体")[design_intent]
+        intent_soft = float(design_intent == 1)
+        intent_defined = float(design_intent == 2)
         customer_noise = float(rng.normal(0.0, 0.25))
 
         for style, _, thickness, length, arch in styles:
@@ -69,6 +73,12 @@ def make_synthetic_rows(case_count: int, prefix: str, seed: int) -> tuple[list[d
                 float(style == "soft"), float(style == "defined"),
                 native_area, side_imbalance, mask_available, native_shape_mode,
             ])
+            features = np.concatenate((features, np.asarray([
+                intent_soft * float(style == "soft"),
+                intent_soft * float(style == "defined"),
+                intent_defined * float(style == "soft"),
+                intent_defined * float(style == "defined"),
+            ])))
             z = -0.22 + float(np.dot((features - FEATURE_MEANS) / FEATURE_SCALES, SYNTHETIC_WEIGHTS))
             z += customer_noise
             probability = float(1.0 / (1.0 + np.exp(-np.clip(z, -20, 20))))
@@ -76,6 +86,8 @@ def make_synthetic_rows(case_count: int, prefix: str, seed: int) -> tuple[list[d
             probabilities.append(probability)
             rows.append({
                 "case_id": case_id,
+                "feedback_schema_version": "3",
+                "design_intent": design_intent_label,
                 "style": style,
                 "thickness": f"{thickness_i:.8f}",
                 "length": f"{length_i:.8f}",

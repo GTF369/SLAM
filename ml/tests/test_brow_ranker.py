@@ -9,6 +9,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from train_brow_ranker import (
     build_matrix,
+    expand_fit_features,
+    FEATURE_NAMES,
     choose_group_split,
     expected_calibration_error,
     calibration_metrics,
@@ -26,6 +28,7 @@ def synthetic_rows(case_count=12):
             rows.append({
                 "case_id": f"SYNTHETIC-{i:03d}",
                 "feedback_schema_version": "3",
+                "design_intent": ("偏柔和" if i % 3 == 0 else "偏立体" if i % 3 == 1 else "均衡自然"),
                 "style": style,
                 "thickness": "1.0",
                 "length": "1.0",
@@ -60,9 +63,21 @@ class BrowRankerTests(unittest.TestCase):
 
     def test_build_matrix_labels_and_groups(self):
         x, y, groups = build_matrix(synthetic_rows())
-        self.assertEqual(x.shape, (24, 15))
+        self.assertEqual(x.shape, (24, 19))
         self.assertEqual(set(np.unique(y)), {0, 1})
         self.assertEqual(len(np.unique(groups)), 12)
+
+    def test_explicit_intent_candidate_interactions_are_encoded(self):
+        base = [0.7, 0.38, 0.80, 0.04, 0.01, 0.0, 0.82, 0.94, 0.72,
+                1.0, 0.0, 0.12, 0.02, 1.0, 0.0]
+        soft_intent = expand_fit_features(base, "偏柔和")
+        defined_intent = expand_fit_features(base[:9] + [0.0, 1.0] + base[11:], "偏立体")
+        index = {name: i for i, name in enumerate(FEATURE_NAMES)}
+        self.assertEqual(len(soft_intent), 19)
+        self.assertAlmostEqual(soft_intent[index["design_intent_soft_x_style_soft"]], 1.0)
+        self.assertAlmostEqual(soft_intent[index["design_intent_soft_x_style_defined"]], 0.0)
+        self.assertAlmostEqual(defined_intent[index["design_intent_defined_x_style_soft"]], 0.0)
+        self.assertAlmostEqual(defined_intent[index["design_intent_defined_x_style_defined"]], 1.0)
 
     def test_group_split_has_no_case_leakage(self):
         x, y, groups = build_matrix(synthetic_rows(30))

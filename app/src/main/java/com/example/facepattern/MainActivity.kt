@@ -4486,22 +4486,8 @@ private object BrowRecommendationEngine {
                                 length = (family.params.length + lengthDelta).coerceIn(0.80f, 1.20f),
                                 arch = (family.params.arch + archDelta).coerceIn(0.55f, 1.45f)
                             )
-                            val x = floatArrayOf(
-                                features.widthHeightRatio,
-                                features.interocularFaceWidthRatio,
-                                features.jawFaceWidthRatio,
-                                features.browEyeDistanceRatio,
-                                features.browAsymmetryRatio,
-                                features.eyeLineTilt,
-                                candidateParams.thickness,
-                                candidateParams.length,
-                                candidateParams.arch,
-                                if (candidateParams.style == 1) 1f else 0f,
-                                if (candidateParams.style == 2) 1f else 0f,
-                                features.nativeBrowAreaFraction,
-                                features.nativeBrowSideImbalance,
-                                features.nativeBrowMaskAvailable,
-                                features.nativeShapeMode
+                            val x = highRatingCandidateFeatures(
+                                features, candidateParams, preferredStyle.coerceIn(0, 2)
                             )
                             val preference = predict(model, x)
                             candidates.add(
@@ -4572,6 +4558,26 @@ private object BrowRecommendationEngine {
             features.nativeBrowMaskAvailable,
             features.nativeShapeMode
         )
+
+    /**
+     * Keep the 15 base features shared with the choice model, then append explicit
+     * customer-intent × candidate-style interactions for the binary high-fit model.
+     */
+    private fun highRatingCandidateFeatures(
+        features: BrowFaceMeasurements,
+        candidateParams: BrowParams,
+        preferredStyle: Int
+    ): FloatArray {
+        val base = candidateFeatures(features, candidateParams)
+        val intentSoft = if (preferredStyle == 1) 1f else 0f
+        val intentDefined = if (preferredStyle == 2) 1f else 0f
+        return base + floatArrayOf(
+            intentSoft * base[9],
+            intentSoft * base[10],
+            intentDefined * base[9],
+            intentDefined * base[10]
+        )
+    }
 
     private fun rankWithChoiceModel(
         features: BrowFaceMeasurements,
@@ -4673,7 +4679,7 @@ private object BrowRecommendationEngine {
             val root = org.json.JSONObject(json)
             // Only a model explicitly human-reviewed after independent calibration and
             // external validation may provide percentages in the live app.
-            if (root.optInt("model_version", -1) != 3) return null
+            if (root.optInt("model_version", -1) != 4) return null
             if (!root.optBoolean("release_approved", false)) return null
             if (root.optString("calibration_status") != "platt_scaling") return null
             val external = root.optJSONObject("external_validation") ?: return null
@@ -4705,7 +4711,11 @@ private object BrowRecommendationEngine {
                 "native_brow_area_fraction",
                 "native_brow_side_imbalance",
                 "native_brow_mask_available",
-                "native_shape_mode"
+                "native_shape_mode",
+                "design_intent_soft_x_style_soft",
+                "design_intent_soft_x_style_defined",
+                "design_intent_defined_x_style_soft",
+                "design_intent_defined_x_style_defined"
             )
             val featureOrder = root.optJSONArray("feature_order") ?: return null
             if (featureOrder.length() != expectedFeatures.size) return null
@@ -4715,11 +4725,11 @@ private object BrowRecommendationEngine {
             val meansJson = root.getJSONArray("means")
             val scalesJson = root.getJSONArray("scales")
             val coefficientsJson = root.getJSONArray("coefficients")
-            if (meansJson.length() != 15 || scalesJson.length() != 15 || coefficientsJson.length() != 15) return null
+            if (meansJson.length() != 19 || scalesJson.length() != 19 || coefficientsJson.length() != 19) return null
             trainedModel = TrainedModel(
-                FloatArray(15) { meansJson.getDouble(it).toFloat() },
-                FloatArray(15) { scalesJson.getDouble(it).toFloat().let { scale -> if (abs(scale) < 1e-8f) 1f else scale } },
-                FloatArray(15) { coefficientsJson.getDouble(it).toFloat() },
+                FloatArray(19) { meansJson.getDouble(it).toFloat() },
+                FloatArray(19) { scalesJson.getDouble(it).toFloat().let { scale -> if (abs(scale) < 1e-8f) 1f else scale } },
+                FloatArray(19) { coefficientsJson.getDouble(it).toFloat() },
                 root.getDouble("intercept").toFloat(),
                 root.getDouble("calibration_intercept").toFloat(),
                 root.getDouble("calibration_slope").toFloat()
