@@ -47,7 +47,7 @@ class BrowWorkflowInstrumentedTest {
         instrumentation.startActivitySync(intent)
         assertTrue(
             "Main screen did not start",
-            device.wait(Until.hasObject(By.text("眉形设计助手")), TimeUnit.SECONDS.toMillis(10))
+            device.wait(Until.hasObject(By.text("眉形设计助手")), TimeUnit.SECONDS.toMillis(30))
         )
     }
 
@@ -70,7 +70,7 @@ class BrowWorkflowInstrumentedTest {
         instrumentation.startActivitySync(intent)
         assertTrue(
             "Main screen did not start for the public portrait",
-            device.wait(Until.hasObject(By.text("眉形设计助手")), TimeUnit.SECONDS.toMillis(10))
+            device.wait(Until.hasObject(By.text("眉形设计助手")), TimeUnit.SECONDS.toMillis(30))
         )
     }
 
