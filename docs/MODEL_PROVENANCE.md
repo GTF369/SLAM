@@ -41,7 +41,13 @@ EasyPortrait 仓库将导出模型仓库标注为 Apache-2.0。原始 EasyPortra
 
 只使用获得相应用途授权的照片和人工标注，并依授权范围控制访问、保留、导出和删除。
 
-## 4. 眉形排序和三维校正
+## 4. 可选整脸审美参考模型与打包策略
+
+SCUT-FBP5500-derived ResNet-50 is **not included in the standard APK**. It predicts whole-face population attractiveness, not eyebrow-fit probability or individual choice. The upstream model card limits intended use to research/education, while the source dataset states non-commercial research terms. Personal self-use alone does not automatically establish permission for those uses. The optional ONNX integration remains documented in [POPULATION_AESTHETIC_PRIOR.md](POPULATION_AESTHETIC_PRIOR.md), but should only be created and packaged after confirming the exact permitted use or obtaining written permission.
+
+The standard build does not fetch this checkpoint, install its PyTorch export dependencies, or include its weights. Genuine eyebrow-fit estimates use explicit feedback recorded in this app; the SCUT model cannot substitute for those labels.
+
+## 5. 眉形排序和三维校正
 
 - 应用暂时没有通过独立验证的通用“最佳眉形”模型。眉形偏好具有个体性，因此排序仍采用可解释几何基线，需积累真实客户评分后才能训练个性化偏好模型。
 - MediaPipe 的相对 z 只能用于离线研究参考，不是毫米级皮肤表面测量，也不能称为真实三维重建。为避免未标定深度改变实体拓描稿，当前版本已禁止该估计进入打印几何。未来只有在独立 3D/物理参考与真实转印误差验证通过后，才考虑重新开放。

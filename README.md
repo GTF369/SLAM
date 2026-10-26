@@ -56,12 +56,8 @@ gradle --no-daemon assembleDebug
 原型不把照片上传服务器。拍摄前会提示取得顾客同意，照片用于本机内存中的设计与打印。保存效果图会将含人脸的图片写入相册。匿名偏好和曲率记录保存在应用内，可导出 CSV，也可用应用内按钮清除。已导出的 CSV、备份和相册图片需要用户另行删除。本机案件库使用 Android Keystore AES-GCM 加密。另有需要用户单独选择位置与设置长口令的加密案例备份，备份内容可跨设备导入但应用不保存该口令，也不提供云端同步。角色权限和自动备份尚未实现。正式使用前仍要完成隐私告知、权限审查、安全评估、数据保留与删除政策审查。
 
 
-## Optional population aesthetic model
+## Optional population aesthetic reference (not included in the standard APK)
 
-The Android build exports a local ONNX version of the SCUT-FBP5500 ResNet-50 human-rating model.
-Its 1–5 score is a **whole-face population aesthetic reference**, not an individual customer's
-eyebrow-fit or choice probability. See [the model limits and research-use notice](docs/POPULATION_AESTHETIC_PRIOR.md).
-This model and the SCUT-FBP5500 dataset are restricted to research/education or non-commercial
-research by their upstream terms. For genuine customer-choice probabilities, use consented
-three-candidate sessions and the disjoint development/calibration/external validation pipeline
-in `ml/train_brow_choice_ranker.py`. The public aesthetic dataset cannot replace customer-choice data.
+The standard Android build deliberately does **not** download or package the SCUT-FBP5500-derived ResNet-50 model. It predicts a whole-face population aesthetic score (1–5), not eyebrow fit or a customer's choice. Upstream terms limit the model to research/education and the dataset to non-commercial research, so personal use alone should not be assumed to satisfy those terms. See [model limits and source terms](docs/POPULATION_AESTHETIC_PRIOR.md).
+
+The app continues to use its transparent geometric reference scores at cold start and can estimate high-fit ratings from consented local customer feedback when sufficient similar cases exist. A genuine three-candidate choice model must be trained on consented choice sessions, temperature-calibrated and independently evaluated on disjoint customer cohorts via `ml/train_brow_choice_ranker.py`. The public face-attractiveness dataset cannot replace customer-choice labels.

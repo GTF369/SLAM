@@ -80,17 +80,6 @@ jobs:
           assert np.isfinite(output).all(), "Model produced NaN or infinite logits"
           print("EasyPortrait model OK:", input_meta.shape, "->", output.shape)
           PY
-      - name: Export SCUT-FBP5500 human-rating prior to ONNX for private self-use
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p app/src/main/assets
-          curl --fail --location --retry 3 --output /tmp/beauty_regressor.pt 'https://huggingface.co/evanlyhf/scut-fbp5500-beauty/resolve/main/beauty_regressor.pt?download=true'
-          test "$(stat -c%s /tmp/beauty_regressor.pt)" -gt 10000000
-          python -m pip install --quiet torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cpu
-          python -m pip install --quiet timm==1.0.15 onnx==1.17.0 onnxruntime==1.23.2
-          python ml/export_brow_aesthetic_onnx.py --checkpoint /tmp/beauty_regressor.pt --output app/src/main/assets/brow_aesthetic_resnet50.onnx
-          test -s app/src/main/assets/brow_aesthetic_resnet50.onnx
       - name: Build production-target ARM64 debug APK
         run: |
           set -euo pipefail
