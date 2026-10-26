@@ -3362,7 +3362,7 @@ class MainActivity : AppCompatActivity() {
         }
         val ratings = candidates.map { candidate ->
             val label = TextView(this).apply {
-                text = "${candidate.name}满意度评分（必填）"
+                text = "${candidate.name}眉形适配度（1=不适合，5=非常适合）"
                 textSize = 14f
                 setPadding(0, dp(6), 0, 0)
             }
@@ -3387,11 +3387,11 @@ class MainActivity : AppCompatActivity() {
             })
         }
         val consent = CheckBox(this).apply {
-            text = "已取得顾客明确同意，将本次匿名几何特征、三个候选参数、评分和最终选择用于训练与验证推荐模型"
+            text = "已取得顾客明确同意，将匿名几何特征、三个候选参数、适配度评分和最终选择用于训练与本机历史适配估计"
             isChecked = false
         }
         val note = TextView(this).apply {
-            text = "一次记录三款候选，系统写成同一会话的三行数据，并确保最终选择只标记一款。请勿填写姓名、电话、预约号等身份信息。不同意研究用途时请取消，设计功能不受影响。当前规则分或群体审美分不是适配概率。"
+            text = "请顾客本人分别评价三款眉形的适配度，并选择最终方案。一次记录三款候选，保存为同一会话三行数据。请勿填写姓名、电话、预约号等身份信息。样本不足时不显示适配概率。不同意研究用途时请取消，设计功能不受影响。"
             textSize = 12f
             setPadding(0, 0, 0, dp(6))
         }
@@ -3481,7 +3481,7 @@ class MainActivity : AppCompatActivity() {
                         else -> "natural"
                     }
                     retained.put(org.json.JSONObject().apply {
-                        put("feedback_schema_version", 2)
+                        put("feedback_schema_version", 3)
                         put("case_id", safeCode)
                         put("session_id", currentDesignSessionId)
                         put("style", styleName)
