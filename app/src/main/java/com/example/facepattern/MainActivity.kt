@@ -1273,31 +1273,37 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshRecommendations(points: List<PointF>) {
-        val ranked = BrowRecommendationEngine.rank(
+        val rawRanked = BrowRecommendationEngine.rank(
             this, points, segmentationResult, segmentationReviewed, useNativeShape,
             preferredStyle = selectedDesignIntent
         )
         val hasValidatedPreferenceModel = BrowRecommendationEngine.hasApprovedModel(this)
-        val usePopulationAestheticPrior = !hasValidatedPreferenceModel &&
+        val historicalFit = if (!hasValidatedPreferenceModel) {
+            BrowHistoricalFitEstimator.estimate(
+                this, rawRanked, points, segmentationResult, segmentationReviewed,
+                useNativeShape, selectedDesignIntent
+            )
+        } else null
+        val ranked = historicalFit?.recommendations ?: rawRanked
+        val usePopulationAestheticPrior = !hasValidatedPreferenceModel && historicalFit == null &&
             BrowAestheticPrior.isAvailable(this) && capturedPhoto != null && points.size >= 455
         val styleText = "\n当前风格倾向：${designIntentLabels[selectedDesignIntent]}。倾向可随时修改，最终仍由顾客与设计师确认。"
         recommendationLabel.text = when {
             hasValidatedPreferenceModel -> BrowRecommendationEngine.sourceLabel(this) + styleText
+            historicalFit != null -> historicalFit.sourceLabel() + styleText
             usePopulationAestheticPrior -> "正在计算三个候选的群体审美参考分（不是顾客选择概率）。" + styleText
             else -> BrowRecommendationEngine.sourceLabel(this) + styleText
         }
         presentRecommendations(ranked)
 
-        // Do not let a population-level facial-attractiveness model overwrite a genuine
-        // independently validated customer-choice or high-rating model.
+        // Whole-face beauty ratings are not fit probabilities. Use that model only for
+        // a cold-start display when neither approved feedback model nor local fit history exists.
         val generation = ++aestheticScoringGeneration
         if (!usePopulationAestheticPrior) return
         val sessionSnapshot = currentDesignSessionId
         val pointSnapshot = points.map { PointF(it.x, it.y) }
         val sourceWidth = capturedPhoto?.width?.toFloat() ?: return
         val sourceHeight = capturedPhoto?.height?.toFloat() ?: return
-        // A 768px longest edge is enough for the 224px rating model and avoids three
-        // simultaneous full-resolution RGBA buffers on memory-constrained phones.
         val rendered = ranked.mapNotNull { recommendation ->
             browView.renderCandidateBitmap(recommendation.params, maxDimension = 768)
                 ?.let { recommendation to it }
@@ -1307,7 +1313,6 @@ class MainActivity : AppCompatActivity() {
             recommendationLabel.text = "无法完整渲染候选，已退回规则参考分。" + styleText
             return
         }
-
         Thread({
             val scored = rendered.mapNotNull { (recommendation, bitmap) ->
                 try {
@@ -1350,6 +1355,7 @@ class MainActivity : AppCompatActivity() {
             val button = Button(this).apply {
                 text = when (recommendation.probabilityType) {
                     "conditional_choice" -> "${recommendation.name}\n本组选择概率 ${String.format(java.util.Locale.getDefault(), "%.1f", (recommendation.probability ?: 0f) * 100f)}%"
+                    "personal_history_fit" -> "${recommendation.name}\n历史高适配评分概率 ${String.format(java.util.Locale.getDefault(), "%.1f", (recommendation.probability ?: 0f) * 100f)}%"
                     "high_rating" -> "${recommendation.name}\n获得 4–5 分概率 ${String.format(java.util.Locale.getDefault(), "%.1f", (recommendation.probability ?: 0f) * 100f)}%"
                     "population_aesthetic" -> "${recommendation.name}\n群体审美参考 ${String.format(java.util.Locale.getDefault(), "%.2f", recommendation.aestheticRating ?: 0f)} / 5"
                     else -> "${recommendation.name}\n规则参考分 ${recommendation.score}"
@@ -5516,5 +5522,195 @@ private object BrowRenderer {
         )
         if (unmirrored !== template) template.recycle()
         return unmirrored
+    }
+}
+
+/**
+ * Local small-data estimator for the probability of a 4–5 explicit eyebrow-fit rating.
+ * It uses consented v3 records only and intentionally requires several distinct clients.
+ * Results are experience-based and are not externally calibrated population probabilities.
+ */
+private object BrowHistoricalFitEstimator {
+    data class Result(
+        val recommendations: List<BrowRecommendation>,
+        val feedbackCases: Int
+    ) {
+        fun sourceLabel(): String =
+            "本机真实反馈适配估计：使用最近 ${feedbackCases} 位不同匿名顾客的完整三款适配评分。百分比表示候选获得 4–5 分适配评价的估计概率，各候选不要求合计为 100%。这是小样本相似案例估计，尚未经独立外部校准。"
+    }
+
+    private data class CandidateFeedback(
+        val style: String,
+        val rating: Int,
+        val features: FloatArray,
+        val intent: Int,
+        val timestamp: Long
+    )
+
+    private data class SessionFeedback(
+        val caseId: String,
+        val timestamp: Long,
+        val candidates: List<CandidateFeedback>
+    )
+
+    private val scales = floatArrayOf(
+        0.18f, 0.08f, 0.15f, 0.04f, 0.07f, 0.08f,
+        0.18f, 0.12f, 0.20f, 0.50f, 0.50f,
+        0.12f, 0.15f, 0.50f, 0.50f
+    )
+
+    fun estimate(
+        context: Context,
+        candidates: List<BrowRecommendation>,
+        points: List<PointF>,
+        segmentation: BrowSegmentationResult?,
+        maskReviewed: Boolean,
+        nativeShapeMode: Boolean,
+        preferredStyle: Int
+    ): Result? {
+        if (candidates.size != 3 || points.size < 455) return null
+        return try {
+            val rows = org.json.JSONArray(
+                context.getSharedPreferences("brow_preference_feedback", Context.MODE_PRIVATE)
+                    .getString("records", "[]")
+            )
+            val groups = linkedMapOf<String, MutableList<org.json.JSONObject>>()
+            for (i in 0 until rows.length()) {
+                val row = rows.optJSONObject(i) ?: continue
+                // Older schema rows captured general satisfaction, not explicit eyebrow fit.
+                if (row.optInt("feedback_schema_version", 0) < 3) continue
+                val session = row.optString("session_id", "").trim()
+                if (session.isNotEmpty()) groups.getOrPut(session) { mutableListOf() }.add(row)
+            }
+            val complete = groups.mapNotNull { (sessionId, groupRows) -> parseSession(sessionId, groupRows) }
+            // Use one latest session per anonymous customer to avoid inflating independent n.
+            val latest = complete.groupBy { it.caseId }.mapNotNull { (_, sessions) ->
+                sessions.maxByOrNull { it.timestamp }
+            }
+            if (latest.size < 5) return null
+
+            val face = BrowRecommendationEngine.measurements(points, segmentation, maskReviewed, nativeShapeMode)
+            val targetVectors = candidates.map { vector(face, it.params) }
+            val intent = preferredStyle.coerceIn(0, 2)
+            val scored = mutableListOf<BrowRecommendation>()
+            for (candidateIndex in candidates.indices) {
+                val candidate = candidates[candidateIndex]
+                val candidateStyle = styleName(candidate.params.style)
+                val target = targetVectors[candidateIndex]
+                var weightSum = 0.0
+                var squaredWeightSum = 0.0
+                var positiveWeightSum = 0.0
+                latest.forEach { session ->
+                    // One observation per style per customer: never mix natural/soft/defined labels.
+                    val historical = session.candidates.firstOrNull { it.style == candidateStyle } ?: return@forEach
+                    var distance2 = 0.0
+                    for (j in target.indices) {
+                        val z = ((target[j] - historical.features[j]) / scales[j]).toDouble()
+                        distance2 += z * z
+                    }
+                    val similarity = kotlin.math.exp(-0.5 * distance2 / target.size.toDouble())
+                    val intentWeight = if (intent == historical.intent) 1.0 else 0.70
+                    val weight = similarity * intentWeight
+                    weightSum += weight
+                    squaredWeightSum += weight * weight
+                    if (historical.rating >= 4) positiveWeightSum += weight
+                }
+                if (weightSum <= 0.0 || squaredWeightSum <= 0.0) return null
+                val effectiveN = weightSum * weightSum / squaredWeightSum
+                if (!effectiveN.isFinite() || effectiveN < 2.5) return null
+
+                // Convert weighted outcomes into effective fractional counts, then apply Beta(1,1).
+                val positiveRate = (positiveWeightSum / weightSum).coerceIn(0.0, 1.0)
+                val alpha = 1.0 + effectiveN * positiveRate
+                val beta = 1.0 + effectiveN * (1.0 - positiveRate)
+                val sum = alpha + beta
+                val probability = (alpha / sum).coerceIn(0.0, 1.0)
+                val sd = kotlin.math.sqrt(alpha * beta / (sum * sum * (sum + 1.0)))
+                val lower = (probability - 1.644854 * sd).coerceIn(0.0, 1.0)
+                val upper = (probability + 1.644854 * sd).coerceIn(0.0, 1.0)
+                val pText = String.format(java.util.Locale.US, "%.1f", probability * 100.0)
+                val loText = String.format(java.util.Locale.US, "%.1f", lower * 100.0)
+                val hiText = String.format(java.util.Locale.US, "%.1f", upper * 100.0)
+                val nText = String.format(java.util.Locale.US, "%.1f", effectiveN)
+                scored.add(candidate.copy(
+                    score = (probability * 100.0).roundToInt().coerceIn(0, 100),
+                    reason = "本机真实适配反馈估计：获得 4–5 分评价的概率约 ${pText}%，同款候选有效样本量约 ${nText}，近似 90% 区间为 ${loText}%–${hiText}%。此估计尚未经独立外部校准。",
+                    probability = probability.toFloat(),
+                    probabilityType = "personal_history_fit",
+                    choiceLogit = null,
+                    aestheticRating = null
+                ))
+            }
+            Result(scored.sortedByDescending { it.probability ?: 0f }, latest.size)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun parseSession(sessionId: String, rows: List<org.json.JSONObject>): SessionFeedback? {
+        if (rows.size != 3) return null
+        val caseIds = rows.map { it.optString("case_id", "").trim() }.toSet()
+        if (caseIds.size != 1 || caseIds.first().isBlank()) return null
+        if (rows.map { it.optString("style", "").trim().lowercase() }.toSet() != setOf("natural", "soft", "defined")) return null
+        if (rows.count { it.optBoolean("selected", false) } != 1) return null
+
+        val parsed = rows.mapNotNull { row ->
+            val style = row.optString("style", "").trim().lowercase()
+            val rating = row.optInt("rating", 0)
+            if (rating !in 1..5) return@mapNotNull null
+            val intent = when (row.optString("design_intent", "")) {
+                "均衡自然" -> 0
+                "偏柔和" -> 1
+                "偏立体" -> 2
+                else -> return@mapNotNull null
+            }
+            val values = try {
+                floatArrayOf(
+                    row.getDouble("face_width_height_ratio").toFloat(),
+                    row.getDouble("interocular_face_width_ratio").toFloat(),
+                    row.getDouble("jaw_face_width_ratio").toFloat(),
+                    row.getDouble("brow_eye_distance_ratio").toFloat(),
+                    row.getDouble("brow_asymmetry_ratio").toFloat(),
+                    row.getDouble("eye_line_tilt").toFloat(),
+                    row.getDouble("thickness").toFloat(),
+                    row.getDouble("length").toFloat(),
+                    row.getDouble("arch").toFloat(),
+                    if (style == "soft") 1f else 0f,
+                    if (style == "defined") 1f else 0f,
+                    row.getDouble("native_brow_area_fraction").toFloat(),
+                    row.getDouble("native_brow_side_imbalance").toFloat(),
+                    row.getDouble("native_brow_mask_available").toFloat(),
+                    row.getDouble("native_shape_mode").toFloat()
+                )
+            } catch (_: Exception) { return@mapNotNull null }
+            if (values.any { !it.isFinite() }) return@mapNotNull null
+            CandidateFeedback(style, rating, values, intent, row.optLong("timestamp", 0L))
+        }
+        if (parsed.size != 3 || parsed.map { it.intent }.toSet().size != 1) return null
+        return SessionFeedback(caseIds.first(), parsed.maxOf { it.timestamp }, parsed)
+    }
+
+    private fun vector(face: BrowFaceMeasurements, params: BrowParams): FloatArray = floatArrayOf(
+        face.widthHeightRatio,
+        face.interocularFaceWidthRatio,
+        face.jawFaceWidthRatio,
+        face.browEyeDistanceRatio,
+        face.browAsymmetryRatio,
+        face.eyeLineTilt,
+        params.thickness,
+        params.length,
+        params.arch,
+        if (params.style == 1) 1f else 0f,
+        if (params.style == 2) 1f else 0f,
+        face.nativeBrowAreaFraction,
+        face.nativeBrowSideImbalance,
+        face.nativeBrowMaskAvailable,
+        face.nativeShapeMode
+    )
+
+    private fun styleName(style: Int): String = when (style) {
+        1 -> "soft"
+        2 -> "defined"
+        else -> "natural"
     }
 }
