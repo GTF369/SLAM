@@ -87,6 +87,75 @@ class BrowWorkflowInstrumentedTest {
     }
 
     @Test
+    fun historicalFitReadinessCountsOnlyCompleteV3CustomersAndRequiresRelevantSupport() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val preferences = context.getSharedPreferences("brow_preference_feedback", 0)
+        val originalRecords = preferences.getString("records", null)
+        try {
+            val rows = org.json.JSONArray()
+            fun appendSession(caseId: String, sessionId: String, schemaVersion: Int, timestampBase: Long) {
+                val styles = listOf("natural", "soft", "defined")
+                val thickness = listOf(1.0, 0.82, 1.18)
+                val length = listOf(1.0, 0.94, 1.06)
+                val arch = listOf(0.92, 0.72, 1.22)
+                styles.forEachIndexed { index, style ->
+                    rows.put(org.json.JSONObject().apply {
+                        put("feedback_schema_version", schemaVersion)
+                        put("case_id", caseId)
+                        put("session_id", sessionId)
+                        put("style", style)
+                        put("candidate_name", style)
+                        put("rating", if (index == 0) 5 else 3)
+                        put("selected", index == 0)
+                        put("design_intent", "均衡自然")
+                        put("timestamp", timestampBase + index)
+                        put("face_width_height_ratio", 0.65)
+                        put("interocular_face_width_ratio", 0.35)
+                        put("jaw_face_width_ratio", 0.80)
+                        put("brow_eye_distance_ratio", 0.12)
+                        put("brow_asymmetry_ratio", 0.0)
+                        put("eye_line_tilt", 0.0)
+                        put("thickness", thickness[index])
+                        put("length", length[index])
+                        put("arch", arch[index])
+                        put("native_brow_area_fraction", 0.05)
+                        put("native_brow_side_imbalance", 0.0)
+                        put("native_brow_mask_available", 0.0)
+                        put("native_shape_mode", 0.0)
+                    })
+                }
+            }
+            for (customer in 0 until 5) {
+                appendSession(
+                    "FIT_TEST_CUSTOMER_$customer",
+                    "FIT_TEST_SESSION_$customer",
+                    3,
+                    1000L + customer * 10L
+                )
+            }
+            // Older general-satisfaction rows must not count as explicit eyebrow-fit labels.
+            appendSession("FIT_TEST_LEGACY", "FIT_TEST_LEGACY_SESSION", 2, 9000L)
+            assertTrue("Test records must be persisted before the estimator reads them",
+                preferences.edit().putString("records", rows.toString()).commit())
+
+            assertEquals(5, BrowHistoricalFitEstimator.validCustomerCount(context))
+            assertTrue(BrowHistoricalFitEstimator.hasSufficientSupport(1.5, 0.25, 2.5))
+            assertTrue(BrowHistoricalFitEstimator.hasSufficientSupport(2.0, 0.40, 4.0))
+            assertTrue("Distant cases must not create apparently precise probabilities",
+                !BrowHistoricalFitEstimator.hasSufficientSupport(0.10, 0.01, 5.0))
+            assertTrue("Low aggregate similarity must fail the support gate",
+                !BrowHistoricalFitEstimator.hasSufficientSupport(0.80, 0.30, 4.0))
+            assertTrue("Low effective sample size must fail the support gate",
+                !BrowHistoricalFitEstimator.hasSufficientSupport(2.0, 0.40, 2.49))
+            assertTrue(BrowHistoricalFitEstimator.readinessLabel(context).contains("5 位"))
+        } finally {
+            val editor = preferences.edit()
+            if (originalRecords == null) editor.remove("records") else editor.putString("records", originalRecords)
+            editor.commit()
+        }
+    }
+
+    @Test
     fun measuredSurfaceCompensationUsesPhotoScaleAndRejectsInvalidFactors() {
         val projectedMm = BrowSurfaceCompensation.projectedSegmentMillimetres(
             projectedSegmentPixels = 100f,

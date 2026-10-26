@@ -1287,12 +1287,15 @@ class MainActivity : AppCompatActivity() {
         val ranked = historicalFit?.recommendations ?: rawRanked
         val usePopulationAestheticPrior = !hasValidatedPreferenceModel && historicalFit == null &&
             BrowAestheticPrior.isAvailable(this) && capturedPhoto != null && points.size >= 455
+        val feedbackReadiness = if (!hasValidatedPreferenceModel && historicalFit == null) {
+            "\n" + BrowHistoricalFitEstimator.readinessLabel(this)
+        } else ""
         val styleText = "\n当前风格倾向：${designIntentLabels[selectedDesignIntent]}。倾向可随时修改，最终仍由顾客与设计师确认。"
         recommendationLabel.text = when {
             hasValidatedPreferenceModel -> BrowRecommendationEngine.sourceLabel(this) + styleText
             historicalFit != null -> historicalFit.sourceLabel() + styleText
-            usePopulationAestheticPrior -> "正在计算三个候选的群体审美参考分（不是顾客选择概率）。" + styleText
-            else -> BrowRecommendationEngine.sourceLabel(this) + styleText
+            usePopulationAestheticPrior -> "正在计算三个候选的群体整脸审美参考分（不是顾客选择概率，也不是眉形适配概率）。" + feedbackReadiness + styleText
+            else -> BrowRecommendationEngine.sourceLabel(this) + feedbackReadiness + styleText
         }
         presentRecommendations(ranked)
 
@@ -1310,7 +1313,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (rendered.size != ranked.size) {
             rendered.forEach { (_, bitmap) -> if (!bitmap.isRecycled) bitmap.recycle() }
-            recommendationLabel.text = "无法完整渲染候选，已退回规则参考分。" + styleText
+            recommendationLabel.text = "无法完整渲染候选，已退回规则参考分。" + feedbackReadiness + styleText
             return
         }
         Thread({
@@ -1338,10 +1341,10 @@ class MainActivity : AppCompatActivity() {
                 if (generation != aestheticScoringGeneration ||
                     sessionSnapshot != currentDesignSessionId || isFinishing || isDestroyed) return@runOnUiThread
                 if (scored.size == ranked.size) {
-                    recommendationLabel.text = BrowAestheticPrior.sourceLabel() + styleText
+                    recommendationLabel.text = BrowAestheticPrior.sourceLabel() + feedbackReadiness + styleText
                     presentRecommendations(scored)
                 } else {
-                    recommendationLabel.text = "群体审美模型推理未能完成全部候选，当前仍显示规则参考分。" + styleText
+                    recommendationLabel.text = "群体审美模型推理未能完成全部候选，当前仍显示规则参考分。" + feedbackReadiness + styleText
                     presentRecommendations(ranked)
                 }
             }
@@ -5530,7 +5533,7 @@ private object BrowRenderer {
  * It uses consented v3 records only and intentionally requires several distinct clients.
  * Results are experience-based and are not externally calibrated population probabilities.
  */
-private object BrowHistoricalFitEstimator {
+internal object BrowHistoricalFitEstimator {
     data class Result(
         val recommendations: List<BrowRecommendation>,
         val feedbackCases: Int
@@ -5558,6 +5561,37 @@ private object BrowHistoricalFitEstimator {
         0.18f, 0.12f, 0.20f, 0.50f, 0.50f,
         0.12f, 0.15f, 0.50f, 0.50f
     )
+
+    internal fun hasSufficientSupport(weightSum: Double, maxWeight: Double, effectiveN: Double): Boolean =
+        weightSum.isFinite() && maxWeight.isFinite() && effectiveN.isFinite() &&
+            weightSum >= 1.5 && maxWeight >= 0.25 && effectiveN >= 2.5
+
+    internal fun validCustomerCount(context: Context): Int = try {
+        val rows = org.json.JSONArray(
+            context.getSharedPreferences("brow_preference_feedback", Context.MODE_PRIVATE)
+                .getString("records", "[]")
+        )
+        val groups = linkedMapOf<String, MutableList<org.json.JSONObject>>()
+        for (i in 0 until rows.length()) {
+            val row = rows.optJSONObject(i) ?: continue
+            if (row.optInt("feedback_schema_version", 0) < 3) continue
+            val session = row.optString("session_id", "").trim()
+            if (session.isNotEmpty()) groups.getOrPut(session) { mutableListOf() }.add(row)
+        }
+        groups.mapNotNull { (sessionId, groupRows) -> parseSession(sessionId, groupRows) }
+            .groupBy { it.caseId }.size
+    } catch (_: Exception) {
+        0
+    }
+
+    internal fun readinessLabel(context: Context): String {
+        val count = validCustomerCount(context)
+        return if (count < 5) {
+            "真实适配概率正在等待真实反馈：本机已有 ${count}/5 位不同匿名顾客完成三款评分。请在“顾客偏好”中记录顾客本人对自然、柔和、立体三款的 1–5 分适配评分并选择最终方案。样本不足时只显示参考分，不输出伪概率。"
+        } else {
+            "本机已记录 ${count} 位不同匿名顾客的完整反馈，但当前候选尚未全部达到相似历史案例支持度门槛，因此暂不显示适配概率。"
+        }
+    }
 
     fun estimate(
         context: Context,
@@ -5600,6 +5634,7 @@ private object BrowHistoricalFitEstimator {
                 var weightSum = 0.0
                 var squaredWeightSum = 0.0
                 var positiveWeightSum = 0.0
+                var maximumWeight = 0.0
                 latest.forEach { session ->
                     // One observation per style per customer: never mix natural/soft/defined labels.
                     val historical = session.candidates.firstOrNull { it.style == candidateStyle } ?: return@forEach
@@ -5611,13 +5646,17 @@ private object BrowHistoricalFitEstimator {
                     val similarity = kotlin.math.exp(-0.5 * distance2 / target.size.toDouble())
                     val intentWeight = if (intent == historical.intent) 1.0 else 0.70
                     val weight = similarity * intentWeight
+                    if (weight > maximumWeight) maximumWeight = weight
                     weightSum += weight
                     squaredWeightSum += weight * weight
                     if (historical.rating >= 4) positiveWeightSum += weight
                 }
                 if (weightSum <= 0.0 || squaredWeightSum <= 0.0) return null
                 val effectiveN = weightSum * weightSum / squaredWeightSum
-                if (!effectiveN.isFinite() || effectiveN < 2.5) return null
+                // Kish effective n alone is insufficient: five equally distant cases can
+                // produce a large effective n even when every similarity weight is tiny.
+                // Require absolute historical support before exposing a percentage.
+                if (!hasSufficientSupport(weightSum, maximumWeight, effectiveN)) return null
 
                 // Convert weighted outcomes into effective fractional counts, then apply Beta(1,1).
                 val positiveRate = (positiveWeightSum / weightSum).coerceIn(0.0, 1.0)
