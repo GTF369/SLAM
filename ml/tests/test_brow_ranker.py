@@ -1,4 +1,6 @@
+import csv
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -12,6 +14,7 @@ from train_brow_ranker import (
     calibration_metrics,
     geometric_reference_scores,
     clustered_auc_comparison_ci,
+    read_rows,
 )
 
 
@@ -22,6 +25,7 @@ def synthetic_rows(case_count=12):
         for style, rating in (("natural", 5 if i % 2 == 0 else 2), ("soft", 2 if i % 2 == 0 else 5)):
             rows.append({
                 "case_id": f"SYNTHETIC-{i:03d}",
+                "feedback_schema_version": "3",
                 "style": style,
                 "thickness": "1.0",
                 "length": "1.0",
@@ -42,6 +46,18 @@ def synthetic_rows(case_count=12):
 
 
 class BrowRankerTests(unittest.TestCase):
+    def test_fit_training_rejects_legacy_general_satisfaction_rows(self):
+        row = synthetic_rows(1)[0]
+        row["feedback_schema_version"] = "2"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "legacy.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=list(row.keys()))
+                writer.writeheader()
+                writer.writerow(row)
+            with self.assertRaisesRegex(ValueError, "explicit eyebrow-fit ratings"):
+                read_rows(path)
+
     def test_build_matrix_labels_and_groups(self):
         x, y, groups = build_matrix(synthetic_rows())
         self.assertEqual(x.shape, (24, 15))
