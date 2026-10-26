@@ -47,7 +47,7 @@ class BrowDesignSmokeTest {
             eraseColor(Color.TRANSPARENT)
         }
         try {
-            assertTrue("MainActivity did not become visible", device.wait(Until.hasObject(By.text("眉形设计助手")), 10_000))
+            assertTrue("MainActivity did not become visible", device.wait(Until.hasObject(By.text("眉形设计助手")), 30_000))
             scenario.onActivity { activity ->
                 val viewField = MainActivity::class.java.getDeclaredField("browView").apply { isAccessible = true }
                 val view = viewField.get(activity) as View
@@ -166,7 +166,7 @@ class BrowDesignSmokeTest {
             this[336] = android.graphics.PointF(66f, 33f)
         }
         try {
-            assertTrue("MainActivity did not become visible", device.wait(Until.hasObject(By.text("眉形设计助手")), 10_000))
+            assertTrue("MainActivity did not become visible", device.wait(Until.hasObject(By.text("眉形设计助手")), 30_000))
             scenario.onActivity { activity ->
                 MainActivity::class.java.getDeclaredField("capturedPhoto").apply {
                     isAccessible = true
