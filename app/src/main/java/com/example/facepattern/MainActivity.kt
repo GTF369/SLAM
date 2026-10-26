@@ -5533,7 +5533,13 @@ private object BrowRenderer {
  * It uses consented v3 records only and intentionally requires several distinct clients.
  * Results are experience-based and are not externally calibrated population probabilities.
  */
-internal object BrowHistoricalFitEstimator {
+internal object BrowFitSupportGate {
+    fun hasSufficientSupport(weightSum: Double, maxWeight: Double, effectiveN: Double): Boolean =
+        weightSum.isFinite() && maxWeight.isFinite() && effectiveN.isFinite() &&
+            weightSum >= 1.5 && maxWeight >= 0.25 && effectiveN >= 2.5
+}
+
+private object BrowHistoricalFitEstimator {
     data class Result(
         val recommendations: List<BrowRecommendation>,
         val feedbackCases: Int
@@ -5561,10 +5567,6 @@ internal object BrowHistoricalFitEstimator {
         0.18f, 0.12f, 0.20f, 0.50f, 0.50f,
         0.12f, 0.15f, 0.50f, 0.50f
     )
-
-    internal fun hasSufficientSupport(weightSum: Double, maxWeight: Double, effectiveN: Double): Boolean =
-        weightSum.isFinite() && maxWeight.isFinite() && effectiveN.isFinite() &&
-            weightSum >= 1.5 && maxWeight >= 0.25 && effectiveN >= 2.5
 
     internal fun validCustomerCount(context: Context): Int = try {
         val rows = org.json.JSONArray(
@@ -5656,7 +5658,7 @@ internal object BrowHistoricalFitEstimator {
                 // Kish effective n alone is insufficient: five equally distant cases can
                 // produce a large effective n even when every similarity weight is tiny.
                 // Require absolute historical support before exposing a percentage.
-                if (!hasSufficientSupport(weightSum, maximumWeight, effectiveN)) return null
+                if (!BrowFitSupportGate.hasSufficientSupport(weightSum, maximumWeight, effectiveN)) return null
 
                 // Convert weighted outcomes into effective fractional counts, then apply Beta(1,1).
                 val positiveRate = (positiveWeightSum / weightSum).coerceIn(0.0, 1.0)

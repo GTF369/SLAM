@@ -138,16 +138,24 @@ class BrowWorkflowInstrumentedTest {
             assertTrue("Test records must be persisted before the estimator reads them",
                 preferences.edit().putString("records", rows.toString()).commit())
 
-            assertEquals(5, BrowHistoricalFitEstimator.validCustomerCount(context))
-            assertTrue(BrowHistoricalFitEstimator.hasSufficientSupport(1.5, 0.25, 2.5))
-            assertTrue(BrowHistoricalFitEstimator.hasSufficientSupport(2.0, 0.40, 4.0))
+            val estimatorClass = Class.forName("com.example.facepattern.BrowHistoricalFitEstimator")
+            val estimatorInstance = estimatorClass.getDeclaredField("INSTANCE").apply { isAccessible = true }.get(null)
+            val countMethod = estimatorClass.declaredMethods.first {
+                it.name.startsWith("validCustomerCount") && it.parameterTypes.size == 1
+            }.apply { isAccessible = true }
+            assertEquals(5, countMethod.invoke(estimatorInstance, context))
+            val readinessMethod = estimatorClass.declaredMethods.first {
+                it.name.startsWith("readinessLabel") && it.parameterTypes.size == 1
+            }.apply { isAccessible = true }
+            assertTrue((readinessMethod.invoke(estimatorInstance, context) as String).contains("5 位"))
+            assertTrue(BrowFitSupportGate.hasSufficientSupport(1.5, 0.25, 2.5))
+            assertTrue(BrowFitSupportGate.hasSufficientSupport(2.0, 0.40, 4.0))
             assertTrue("Distant cases must not create apparently precise probabilities",
-                !BrowHistoricalFitEstimator.hasSufficientSupport(0.10, 0.01, 5.0))
+                !BrowFitSupportGate.hasSufficientSupport(0.10, 0.01, 5.0))
             assertTrue("Low aggregate similarity must fail the support gate",
-                !BrowHistoricalFitEstimator.hasSufficientSupport(0.80, 0.30, 4.0))
+                !BrowFitSupportGate.hasSufficientSupport(0.80, 0.30, 4.0))
             assertTrue("Low effective sample size must fail the support gate",
-                !BrowHistoricalFitEstimator.hasSufficientSupport(2.0, 0.40, 2.49))
-            assertTrue(BrowHistoricalFitEstimator.readinessLabel(context).contains("5 位"))
+                !BrowFitSupportGate.hasSufficientSupport(2.0, 0.40, 2.49))
         } finally {
             val editor = preferences.edit()
             if (originalRecords == null) editor.remove("records") else editor.putString("records", originalRecords)
