@@ -420,6 +420,11 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
         }
         designControls.addView(recommendationRow)
+        // Keep real-feedback collection beside the displayed candidates so it is not hidden
+        // in the lower utility menu. Explicit consent and the three-style review remain required.
+        addButtonRow(designControls, listOf(
+            "记录顾客真实适配反馈" to { recordPreference() }
+        ))
         segmentationLabel = TextView(this).apply {
             text = "原生眉区识别：尚未运行。当前模型会在本机处理照片。"
             textSize = 11f
@@ -3520,10 +3525,15 @@ class MainActivity : AppCompatActivity() {
                 }
                 prefs.edit().putString("records", retained.toString()).apply()
                 Toast.makeText(
-                    this, "已保存同一会话的三款匿名真实反馈。导出后可用于条件选择概率模型训练。",
+                    this, "已保存同一会话的三款匿名真实反馈。正在根据本机真实反馈刷新适配估计。",
                     Toast.LENGTH_LONG
                 ).show()
                 dialog.dismiss()
+                // Each completed review must have its own session ID. Keep the customer ID
+                // stable so later reviews stay grouped by customer during training and testing.
+                currentDesignSessionId = UUID.randomUUID().toString()
+                // Apply newly entered labels immediately instead of requiring a photo/style refresh.
+                refreshRecommendations(browView.facePoints())
             }
         }
         dialog.show()
