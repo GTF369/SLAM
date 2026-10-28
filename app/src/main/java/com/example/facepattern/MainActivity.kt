@@ -32,6 +32,7 @@ import android.provider.MediaStore
 import android.print.PrintManager
 import android.print.pdf.PrintedPdfDocument
 import android.text.InputType
+import android.util.Base64
 import android.view.Gravity
 import android.view.View
 import android.view.animation.LinearInterpolator
@@ -2143,6 +2144,34 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun bitmapToJpegDataUrl(bitmap: Bitmap, maxSide: Int = 1024, quality: Int = 82): String {
+        require(!bitmap.isRecycled && bitmap.width > 0 && bitmap.height > 0) {
+            "The captured photo is no longer available."
+        }
+        val scale = min(1.0, maxSide.toDouble() / max(bitmap.width, bitmap.height).toDouble())
+        val preview = if (scale < 1.0) {
+            Bitmap.createScaledBitmap(
+                bitmap,
+                max(1, (bitmap.width * scale).roundToInt()),
+                max(1, (bitmap.height * scale).roundToInt()),
+                true
+            )
+        } else {
+            bitmap
+        }
+        val output = java.io.ByteArrayOutputStream()
+        try {
+            if (!preview.compress(Bitmap.CompressFormat.JPEG, quality.coerceIn(65, 90), output)) {
+                throw IllegalStateException("Could not encode the face photo.")
+            }
+            val encoded = Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
+            return "data:image/jpeg;base64,$encoded"
+        } finally {
+            if (preview !== bitmap) preview.recycle()
+            output.close()
+        }
+    }
+
     private fun showExternalLlmAdvisor() {
         val photo = capturedPhoto
         val points = browView.facePoints()
@@ -2174,11 +2203,11 @@ class MainActivity : AppCompatActivity() {
             )
         }
         val consent = CheckBox(this).apply {
-            text = "顾客已单独同意将匿名化数字特征发送给外部模型。仅发送比例、眉形参数和风格意向，不发送照片、案例编号或身份信息。"
+            text = "我已取得照片持有者的单独授权，同意将当前人脸照片、匿名化比例特征及三款眉形参数发送给所填写的外部模型。不会发送姓名、联系方式或案例编号。"
             isChecked = false
         }
         val privacyWarning = TextView(this).apply {
-            text = "外部模型只提供启发式设计意见，不是真实顾客偏好概率。客户端中的 API 密钥可能被分析提取，优先使用自有 HTTPS 网关；不要使用高权限、长期或与其他项目共用的密钥。"
+            text = "勾选授权后，会把当前人脸照片上传至你填写的第三方模型服务。请勿上传未经授权的照片。返回的是 AI 设计适配评分，不是经过真实顾客验证的偏好概率。客户端 API 密钥可能被提取，建议使用自有 HTTPS 网关和短期、低权限密钥。"
             textSize = 12f
             setPadding(0, dp(4), 0, dp(6))
         }
@@ -2251,14 +2280,15 @@ class MainActivity : AppCompatActivity() {
                         })
                     }
                 })
-                put("requested_output", "每款给 0-100 的启发式设计兼容分、基于输入数值的观察、以及明确的不确定性说明")
+                put("requested_output", "结合照片可见五官比例及候选参数，为每款给 0-100 的相对设计适配评分和两条可核验观察，说明不确定性；明确这些分数不是顾客偏好概率")
             }
             val apiKey = token.text.toString()
             dialog.dismiss()
-            Toast.makeText(this, "正在请求外部模型。请求中不包含人脸照片或案例编号。", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "正在请求外部模型。当前照片与匿名化设计参数将发送给所选服务。", Toast.LENGTH_LONG).show()
             Thread {
                 val success = try {
-                    Pair(true, BrowExternalLlm.analyze(rootUrl, modelName, apiKey, payload))
+                    val photoDataUrl = bitmapToJpegDataUrl(photo)
+                    Pair(true, BrowExternalLlm.analyze(rootUrl, modelName, apiKey, payload, photoDataUrl))
                 } catch (error: Exception) {
                     Pair(false, error.message ?: "请检查地址、模型名称、网络和提供方额度。")
                 }
