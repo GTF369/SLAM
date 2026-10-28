@@ -2036,6 +2036,7 @@ class MainActivity : AppCompatActivity() {
                 val values = ContentValues().apply {
                     put(MediaStore.Downloads.DISPLAY_NAME, filename)
                     put(MediaStore.Downloads.MIME_TYPE, "text/csv")
+                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/BrowDesign")
                     put(MediaStore.Downloads.IS_PENDING, 1)
                 }
                 val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
