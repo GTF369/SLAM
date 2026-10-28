@@ -1827,7 +1827,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val candidates = choiceCandidatePlans()
-        val displayOrder = candidates.shuffled(kotlin.random.Random(System.nanoTime()))
+        val displayOrder = candidates.shuffled(kotlin.random.Random(System.nanoTime().toInt()))
         val preparedRows = mutableListOf<org.json.JSONObject>()
         val modelCandidates = mutableListOf<BrowChoiceCandidate>()
         var faceFeatureVector = doubleArrayOf()
