@@ -117,14 +117,20 @@ def run_sandbox(seed: int = 2026) -> dict:
     report["release_approved"] = False
     report["test_type"] = "synthetic_conditional_choice_probability_not_real_customer_evidence"
     report["synthetic_true_probabilities_used_for_generation_only"] = True
-    report["mean_probability_mae_vs_synthetic_generator"] = float(np.mean([
-        np.mean(np.abs(softmax(
-            (session["x"] - np.asarray(report["means"])) /
-            np.asarray(report["scales"]) @ np.asarray(report["coefficients"]),
+    probability_errors = []
+    means = np.asarray(report["means"])
+    scales = np.asarray(report["scales"])
+    coefficients = np.asarray(report["coefficients"])
+    for session in external:
+        standardized_x = (session["x"] - means) / scales
+        predicted_probabilities = softmax(
+            standardized_x @ coefficients,
             report["temperature"],
-        ) - np.asarray(true_probs[session["session_id"]]))
-        for session in external
-    ]))
+        )
+        probability_errors.append(float(np.mean(np.abs(
+            predicted_probabilities - np.asarray(true_probs[session["session_id"]])
+        ))))
+    report["mean_probability_mae_vs_synthetic_generator"] = float(np.mean(probability_errors))
     report["note"] = (
         "Synthetic data validates conditional-softmax fitting, temperature scaling and "
         "candidate-set probability arithmetic only. These numbers are not real salon "
