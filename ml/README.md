@@ -108,3 +108,59 @@ No customer-specific segmentation model is shipped without a consented, professi
 - Measured 3D/physical reference and stencil-transfer validation by region.
 - OPPO Find X7 and each target printer tested in person, including 20 mm scale accuracy, no auto-fit setting, page margins, orientation and cancellation.
 - Device performance/crash review, privacy-policy review, third-party license review and a signed release build.
+
+
+## Conditional choice model from real customer decisions
+
+The Android app now includes **三款选择采集** and **导出选择会话**. Each session renders the same customer's photo with the fixed natural / soft / defined candidates, records exactly one customer-selected candidate, optionally records a 1–5 satisfaction rating for each candidate, and stores a stable anonymous `case_id` plus a unique `session_id`. The exported CSV contains numerical measurements and candidate parameters, not the portrait. Obtain explicit, purpose-specific consent before exporting or training.
+
+Do not label an LLM compatibility score, a geometric score, or a public-portrait heuristic as a customer choice. The selected option must come from the customer's own decision. Optional ratings are useful secondary outcomes but are not substituted for the selected-candidate label.
+
+### 1. Export and split the real feedback
+
+Export from Android into `Downloads/BrowDesign/brow_choice_feedback_*.csv`. Copy the file into your local analysis environment and run:
+
+```bash
+python ml/split_choice_cases.py brow_choice_feedback.csv --output-dir ml/data_splits/choice
+```
+
+The splitter validates that every session has exactly three rows, exactly one of each style, and exactly one selected row. It partitions by anonymous customer ID, never by candidate row or session, so repeated visits from one person remain in a single split. Default proportions are 40% development, 20% calibration and 40% external validation. It writes `split_report.json` with per-split row, session and distinct-customer counts.
+
+### 2. Train and calibrate
+
+```bash
+python ml/train_brow_choice_ranker.py ml/data_splits/choice/development.csv \
+  --calibration-csv ml/data_splits/choice/calibration.csv \
+  --external-validation-csv ml/data_splits/choice/external_validation.csv \
+  --output app/src/main/assets/brow_choice_ranker.json
+```
+
+The conditional choice model is a regularized utility model that learns from actual customer-selected candidates and interactions between face measurements, candidate parameters and the **customer-stated** style intent. Temperature scaling is fitted on the separate calibration customers. External evaluation is kept separate and reports top-1 accuracy and its paired gain over the geometry baseline, negative log likelihood, multiclass Brier score and calibration error with customer-cluster bootstrap uncertainty.
+
+Current minimum engineering gates are 30 development customers, 50 separate calibration customers and 100 separate external-validation customers. At a 40/20/40 split, plan on at least about 250 distinct consenting customers, usually with at least one complete three-candidate session each. Multiple sessions from one person do not count as multiple independent customers. These thresholds are early screening gates, not a guarantee of statistical sufficiency. Prefer a **prospective future-customer validation cohort** collected only after model development and calibration are frozen.
+
+Only after checking the report, target-population representativeness, subgroup errors, the baseline comparison and the independent cohort may a human reviewer mark the artifact releasable:
+
+```bash
+python ml/train_brow_choice_ranker.py ml/data_splits/choice/development.csv \
+  --calibration-csv ml/data_splits/choice/calibration.csv \
+  --external-validation-csv ml/data_splits/choice/external_validation.csv \
+  --mark-reviewed-after-human-review \
+  --output app/src/main/assets/brow_choice_ranker.json
+```
+
+Do not run the review flag just to produce percentages. The Android app loads `brow_choice_ranker.json` only when it is version 2 or newer, declares `model_type=conditional_choice`, includes temperature calibration, and has `release_approved: true`. If no such model exists, the app records the real choice but deliberately displays no probability. Once approved, probabilities are **conditional on the three rendered candidates and the feedback protocol**; they are not objective attractiveness, universal suitability or a guaranteed treatment outcome.
+
+### 3. External LLM review is optional and not training truth
+
+The app includes an optional OpenAI-compatible Chat Completions adapter. At runtime, the user enters a supported endpoint and model ID and explicitly confirms customer consent. It sends only numerical ratios, the three candidate parameters and the stated design intent; it does not send the portrait or anonymous case/session IDs. LLM output is an **uncalibrated compatibility opinion**, never the ground-truth label and never a customer preference probability. It must not be silently mixed into the customer-choice training CSV.
+
+Direct API keys embedded in a mobile app can be extracted. Prefer a self-controlled HTTPS proxy that holds provider credentials server-side, uses usage limits and does not log faces or identifiers. The in-app entry is intended for controlled personal testing rather than a secure multi-user deployment.
+
+### 4. Known evidence limits
+
+- The public-image test is a robustness experiment and has no customer preference labels.
+- Generated synthetic choice rows validate software only and must never train a production model.
+- A properly calibrated model still depends on how candidates are rendered, the population collected and whether customers make unpressured choices.
+- Ratings can be affected by artist presentation, lighting, makeup, novelty and the order of candidates. Use randomized display order in a later prospective study while preserving the style-to-row mapping, and document the protocol.
+- The present app records the choice among three fixed styles. It does not yet prove probabilities for arbitrary thickness / length / arch edits outside the trained candidate distribution.
