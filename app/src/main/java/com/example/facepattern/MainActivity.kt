@@ -325,8 +325,15 @@ class MainActivity : AppCompatActivity() {
         ))
         addButtonRow(designControls, listOf(
             "匿名案例编号" to { editAnonymousCaseId() },
-            "顾客偏好" to { recordPreference() },
-            "导出偏好数据" to { exportPreferenceCsv() }
+            "顾客偏好评分" to { recordPreference() },
+            "导出评分数据" to { exportPreferenceCsv() }
+        ))
+        addButtonRow(designControls, listOf(
+            "三款选择采集" to { recordChoiceSession() },
+            "导出选择会话" to { exportChoiceFeedbackCsv() }
+        ))
+        addButtonRow(designControls, listOf(
+            "外部大模型意见" to { showExternalLlmAdvisor() }
         ))
         addButtonRow(designControls, listOf(
             "清除本机记录" to { clearLocalRecords() }
@@ -1799,6 +1806,455 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun choiceCandidatePlans(): List<Pair<String, BrowPlan>> {
+        // These three parameter sets match ml/simulate_brow_choice_sandbox.py and the choice trainer.
+        // Probabilities are meaningful only conditional on this explicitly shown candidate set.
+        val reviewedMask = segmentationResult
+        val nativeMode = useNativeShape && segmentationReviewed && reviewedMask != null
+        return listOf(
+            "natural" to BrowPlan("自然款", BrowParams(1.00f, 1.00f, 0.92f, 0), nativeMode, reviewedMask),
+            "soft" to BrowPlan("柔和款", BrowParams(0.82f, 0.94f, 0.72f, 1), nativeMode, reviewedMask),
+            "defined" to BrowPlan("立体款", BrowParams(1.18f, 1.06f, 1.22f, 2), nativeMode, reviewedMask)
+        )
+    }
+
+    private fun recordChoiceSession() {
+        val photo = capturedPhoto
+        val points = browView.facePoints()
+        if (photo == null || photo.isRecycled || points.size < 455) {
+            Toast.makeText(this, "请先完成拍照和人脸分析", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val candidates = choiceCandidatePlans()
+        val preparedRows = mutableListOf<org.json.JSONObject>()
+        val modelCandidates = mutableListOf<BrowChoiceCandidate>()
+        var faceFeatureVector = doubleArrayOf()
+        val masksAreReviewed = segmentationReviewed
+
+        candidates.forEachIndexed { index, pair ->
+            val style = pair.first
+            val plan = pair.second
+            val measured = BrowRecommendationEngine.measurements(
+                points, plan.segmentationSnapshot, masksAreReviewed, plan.useNativeShape
+            )
+            if (index == 0) {
+                faceFeatureVector = doubleArrayOf(
+                    measured.widthHeightRatio.toDouble(),
+                    measured.interocularFaceWidthRatio.toDouble(),
+                    measured.jawFaceWidthRatio.toDouble(),
+                    measured.browEyeDistanceRatio.toDouble(),
+                    measured.browAsymmetryRatio.toDouble(),
+                    measured.eyeLineTilt.toDouble()
+                )
+            }
+            modelCandidates.add(
+                BrowChoiceCandidate(
+                    style = style,
+                    thickness = plan.params.thickness.toDouble(),
+                    length = plan.params.length.toDouble(),
+                    arch = plan.params.arch.toDouble(),
+                    nativeBrowAreaFraction = measured.nativeBrowAreaFraction.toDouble(),
+                    nativeBrowSideImbalance = measured.nativeBrowSideImbalance.toDouble(),
+                    nativeBrowMaskAvailable = measured.nativeBrowMaskAvailable.toDouble(),
+                    nativeShapeMode = measured.nativeShapeMode.toDouble()
+                )
+            )
+            preparedRows.add(org.json.JSONObject().apply {
+                put("case_id", currentCaseId)
+                put("style", style)
+                put("thickness", plan.params.thickness.toDouble())
+                put("length", plan.params.length.toDouble())
+                put("arch", plan.params.arch.toDouble())
+                put("face_width_height_ratio", measured.widthHeightRatio.toDouble())
+                put("interocular_face_width_ratio", measured.interocularFaceWidthRatio.toDouble())
+                put("jaw_face_width_ratio", measured.jawFaceWidthRatio.toDouble())
+                put("brow_eye_distance_ratio", measured.browEyeDistanceRatio.toDouble())
+                put("brow_asymmetry_ratio", measured.browAsymmetryRatio.toDouble())
+                put("eye_line_tilt", measured.eyeLineTilt.toDouble())
+                put("native_brow_area_fraction", measured.nativeBrowAreaFraction.toDouble())
+                put("native_brow_side_imbalance", measured.nativeBrowSideImbalance.toDouble())
+                put("native_brow_mask_available", measured.nativeBrowMaskAvailable.toDouble())
+                put("native_shape_mode", measured.nativeShapeMode.toDouble())
+            })
+        }
+
+        val intro = TextView(this).apply {
+            text = "请让顾客查看同一张照片上的三款实际候选，再自行选出最喜欢的一款。每款满意度可不填。只有取得顾客对偏好记录及后续匿名模型研究的单独同意后才保存。原图不会进入 CSV。"
+            textSize = 13f
+            setPadding(dp(18), dp(8), dp(18), dp(8))
+        }
+        val consent = CheckBox(this).apply {
+            text = "顾客已同意保存三款候选的选择与评分，并将匿名数字特征用于后续模型训练和验证"
+            isChecked = false
+            setPadding(dp(18), dp(2), dp(18), dp(6))
+        }
+        val intentSpinner = android.widget.Spinner(this).apply {
+            adapter = android.widget.ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                listOf("顾客意向：均衡自然", "顾客意向：偏柔和", "顾客意向：偏立体")
+            )
+            setPadding(dp(14), 0, dp(14), 0)
+        }
+        val intentLabel = TextView(this).apply {
+            text = "先记录顾客明确表达的风格意向。这是顾客自述，不是系统根据脸型推断出的偏好。"
+            textSize = 11f
+            setPadding(dp(18), dp(2), dp(18), dp(2))
+        }
+        val cardRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+        val previews = mutableListOf<Bitmap>()
+        val ratings = mutableListOf<android.widget.RatingBar>()
+        candidates.forEach { pair ->
+            val plan = pair.second
+            val preview = BrowRenderer.renderPreview(
+                photo, points, plan.params, 300, plan.segmentationSnapshot, plan.useNativeShape
+            )
+            previews.add(preview)
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_HORIZONTAL
+                setPadding(dp(4), dp(4), dp(4), dp(4))
+            }
+            card.addView(ImageView(this).apply {
+                setImageBitmap(preview)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                contentDescription = plan.name
+            }, LinearLayout.LayoutParams(dp(190), dp(220)))
+            card.addView(TextView(this).apply {
+                text = plan.name + " · 粗细 " + String.format(java.util.Locale.US, "%.2f", plan.params.thickness) +
+                    " / 长度 " + String.format(java.util.Locale.US, "%.2f", plan.params.length) +
+                    " / 弧度 " + String.format(java.util.Locale.US, "%.2f", plan.params.arch)
+                textSize = 10f
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(dp(190), -2))
+            card.addView(TextView(this).apply {
+                text = "满意度（可不评）"
+                textSize = 11f
+                setTextColor(0xFFE0E1E5.toInt())
+                gravity = Gravity.CENTER
+            })
+            val rating = android.widget.RatingBar(this).apply {
+                numStars = 5
+                stepSize = 1.0f
+                setIsIndicator(false)
+                this.rating = 0.0f
+                contentDescription = "顾客对" + plan.name + "的满意度"
+                scaleX = 0.83f
+                scaleY = 0.83f
+            }
+            ratings.add(rating)
+            card.addView(rating, LinearLayout.LayoutParams(dp(180), dp(42)))
+            cardRow.addView(card, LinearLayout.LayoutParams(dp(202), -2))
+        }
+        val candidateScroll = HorizontalScrollView(this).apply {
+            addView(cardRow)
+            isHorizontalScrollBarEnabled = true
+        }
+        val chooseLabel = TextView(this).apply {
+            text = "顾客最终选择（必选一款）"
+            textSize = 13f
+            setPadding(dp(18), dp(8), dp(18), dp(2))
+        }
+        val choiceGroup = android.widget.RadioGroup(this).apply {
+            orientation = android.widget.RadioGroup.HORIZONTAL
+            setPadding(dp(10), 0, dp(10), dp(4))
+        }
+        listOf("自然款", "柔和款", "立体款").forEachIndexed { index, label ->
+            choiceGroup.addView(android.widget.RadioButton(this).apply {
+                id = 100 + index
+                text = label
+                textSize = 12f
+            }, android.widget.RadioGroup.LayoutParams(0, -2, 1f))
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(intro)
+            addView(consent)
+            addView(intentLabel)
+            addView(intentSpinner)
+            addView(candidateScroll)
+            addView(chooseLabel)
+            addView(choiceGroup)
+        }
+        val scroll = ScrollView(this).apply {
+            addView(content)
+            isFillViewport = false
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("真实顾客偏好采集")
+            .setView(scroll)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("记录顾客选择", null)
+            .create()
+        dialog.setOnDismissListener {
+            previews.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
+        }
+        dialog.show()
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val selectedIndex = choiceGroup.checkedRadioButtonId - 100
+            if (!consent.isChecked) {
+                Toast.makeText(this, "请先取得并确认顾客的单独授权", Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
+            if (selectedIndex !in candidates.indices) {
+                Toast.makeText(this, "请先记录顾客最终选择的款式", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            val sessionId = UUID.randomUUID().toString()
+            val designIntent = when (intentSpinner.selectedItemPosition) {
+                1 -> "偏柔和"
+                2 -> "偏立体"
+                else -> "均衡自然"
+            }
+            val timestamp = System.currentTimeMillis()
+            val dataset = org.json.JSONArray(
+                getSharedPreferences("brow_choice_feedback", Context.MODE_PRIVATE)
+                    .getString("records", "[]")
+            )
+            preparedRows.forEachIndexed { index, row ->
+                row.put("session_id", sessionId)
+                row.put("design_intent", designIntent)
+                row.put("selected", index == selectedIndex)
+                row.put("rating", if (ratings[index].rating > 0f) ratings[index].rating.roundToInt() else org.json.JSONObject.NULL)
+                row.put("timestamp", timestamp)
+                dataset.put(row)
+            }
+            getSharedPreferences("brow_choice_feedback", Context.MODE_PRIVATE).edit()
+                .putString("records", dataset.toString())
+                .apply()
+
+            // Evaluate only after the customer has recorded a choice, preventing a suggestion
+            // from influencing the first label collected for this session.
+            val trainedRanker = BrowChoiceRanker.load(assets)
+            val prediction = try {
+                trainedRanker?.probabilities(faceFeatureVector, modelCandidates, intentSpinner.selectedItemPosition)
+            } catch (_: Exception) {
+                null
+            }
+            val selectedLabel = listOf("自然款", "柔和款", "立体款")[selectedIndex]
+            val resultText = if (prediction != null && prediction.size == 3) {
+                "本次顾客实际选择：" + selectedLabel + "\n\n经独立真实顾客数据校准、外部验证并审核的模型，对本次三款候选给出的条件偏好估计：\n" +
+                    "自然款：" + String.format(java.util.Locale.getDefault(), "%.1f", prediction[0] * 100.0) + "%\n" +
+                    "柔和款：" + String.format(java.util.Locale.getDefault(), "%.1f", prediction[1] * 100.0) + "%\n" +
+                    "立体款：" + String.format(java.util.Locale.getDefault(), "%.1f", prediction[2] * 100.0) + "%\n\n" +
+                    "百分比只表示在本次展示的三款候选中被选择的估计概率，不代表客观美感或保证。"
+            } else {
+                "本次顾客实际选择：" + selectedLabel + "。三款候选及可选满意度已保存，可导出用于训练和验证。\n\n当前没有已通过独立真实顾客校准、外部验证并人工审核的选择模型，因此不会伪造偏好百分比。"
+            }
+            dialog.dismiss()
+            AlertDialog.Builder(this)
+                .setTitle("选择记录已保存")
+                .setMessage(resultText)
+                .setPositiveButton("完成", null)
+                .show()
+        }
+    }
+
+    private fun exportChoiceFeedbackCsv() {
+        val records = org.json.JSONArray(
+            getSharedPreferences("brow_choice_feedback", Context.MODE_PRIVATE).getString("records", "[]")
+        )
+        if (records.length() == 0) {
+            Toast.makeText(this, "暂无三款候选选择记录。完成一次顾客选择采集后再导出。", Toast.LENGTH_SHORT).show()
+            return
+        }
+        fun csvCell(value: String): String = "\"" + value.replace("\"", "\"\"") + "\""
+        val csv = buildString {
+            append("case_id,session_id,style,thickness,length,arch,selected,design_intent,face_width_height_ratio,interocular_face_width_ratio,jaw_face_width_ratio,brow_eye_distance_ratio,brow_asymmetry_ratio,eye_line_tilt,native_brow_area_fraction,native_brow_side_imbalance,native_brow_mask_available,native_shape_mode,rating,timestamp\n")
+            for (i in 0 until records.length()) {
+                val row = records.optJSONObject(i) ?: continue
+                append(csvCell(row.optString("case_id"))).append(',')
+                append(csvCell(row.optString("session_id"))).append(',')
+                append(csvCell(row.optString("style"))).append(',')
+                append(row.optDouble("thickness")).append(',')
+                append(row.optDouble("length")).append(',')
+                append(row.optDouble("arch")).append(',')
+                append(row.optBoolean("selected")).append(',')
+                append(csvCell(row.optString("design_intent"))).append(',')
+                append(row.optDouble("face_width_height_ratio")).append(',')
+                append(row.optDouble("interocular_face_width_ratio")).append(',')
+                append(row.optDouble("jaw_face_width_ratio")).append(',')
+                append(row.optDouble("brow_eye_distance_ratio")).append(',')
+                append(row.optDouble("brow_asymmetry_ratio")).append(',')
+                append(row.optDouble("eye_line_tilt")).append(',')
+                append(row.optDouble("native_brow_area_fraction")).append(',')
+                append(row.optDouble("native_brow_side_imbalance")).append(',')
+                append(row.optDouble("native_brow_mask_available")).append(',')
+                append(row.optDouble("native_shape_mode")).append(',')
+                val rating = row.optInt("rating", 0)
+                append(if (rating in 1..5) rating.toString() else "").append(',')
+                append(row.optLong("timestamp")).append('\n')
+            }
+        }
+        val filename = "brow_choice_feedback_" + System.currentTimeMillis() + ".csv"
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, filename)
+                    put(MediaStore.Downloads.MIME_TYPE, "text/csv")
+                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/BrowDesign")
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: throw IllegalStateException("无法创建 CSV 文件")
+                contentResolver.openOutputStream(uri)?.use { it.write(csv.toByteArray(Charsets.UTF_8)) }
+                    ?: throw IllegalStateException("无法写入 CSV")
+                val published = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+                contentResolver.update(uri, published, null, null)
+                Toast.makeText(this, "选择会话已导出到 Downloads/BrowDesign，可用于条件选择模型训练", Toast.LENGTH_LONG).show()
+            } else {
+                val directory = File(getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "BrowDesign")
+                if (!directory.exists() && !directory.mkdirs()) throw IllegalStateException("无法创建导出目录")
+                val file = File(directory, filename)
+                file.writeText(csv, Charsets.UTF_8)
+                Toast.makeText(this, "选择会话已导出：" + file.absolutePath, Toast.LENGTH_LONG).show()
+            }
+        } catch (e: Exception) {
+            Toast.makeText(this, "导出失败：" + (e.message ?: "请检查存储空间后重试"), Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun showExternalLlmAdvisor() {
+        val photo = capturedPhoto
+        val points = browView.facePoints()
+        if (photo == null || photo.isRecycled || points.size < 455) {
+            Toast.makeText(this, "请先拍照并完成眉形设计", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val candidates = choiceCandidatePlans()
+        val endpoint = EditText(this).apply {
+            hint = "OpenAI 兼容 API 根地址"
+            setSingleLine(true)
+            setText("https://api.openai.com/v1")
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+        }
+        val model = EditText(this).apply {
+            hint = "模型名称 / 提供方模型 ID"
+            setSingleLine(true)
+        }
+        val token = EditText(this).apply {
+            hint = "可选：网关访问令牌（仅本次请求）"
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        val intentSpinner = android.widget.Spinner(this).apply {
+            adapter = android.widget.ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                listOf("均衡自然", "偏柔和", "偏立体")
+            )
+        }
+        val consent = CheckBox(this).apply {
+            text = "顾客已单独同意将匿名化数字特征发送给外部模型。仅发送比例、眉形参数和风格意向，不发送照片、案例编号或身份信息。"
+            isChecked = false
+        }
+        val privacyWarning = TextView(this).apply {
+            text = "外部模型只提供启发式设计意见，不是真实顾客偏好概率。客户端中的 API 密钥可能被分析提取，优先使用自有 HTTPS 网关；不要使用高权限、长期或与其他项目共用的密钥。"
+            textSize = 12f
+            setPadding(0, dp(4), 0, dp(6))
+        }
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(6), dp(18), dp(2))
+            addView(privacyWarning)
+            addView(endpoint)
+            addView(model)
+            addView(token)
+            addView(TextView(this@MainActivity).apply {
+                text = "顾客意向"
+                textSize = 12f
+            })
+            addView(intentSpinner)
+            addView(consent)
+        }
+        val scroll = ScrollView(this).apply { addView(form) }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("外部大模型设计意见")
+            .setView(scroll)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("请求意见", null)
+            .create()
+        dialog.show()
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            if (!consent.isChecked) {
+                Toast.makeText(this, "请先取得顾客针对外部处理的单独同意", Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
+            val rootUrl = endpoint.text.toString().trim()
+            val modelName = model.text.toString().trim()
+            if (rootUrl.isBlank() || modelName.isBlank()) {
+                Toast.makeText(this, "请填写 API 根地址和模型名称", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            val measuredList = candidates.map { pair ->
+                val plan = pair.second
+                BrowRecommendationEngine.measurements(
+                    points, plan.segmentationSnapshot, segmentationReviewed, plan.useNativeShape
+                )
+            }
+            val first = measuredList.first()
+            val styleIntent = intentSpinner.selectedItem.toString()
+            val payload = org.json.JSONObject().apply {
+                put("task", "比较三款眉形设计的几何兼容性")
+                put("design_intent", styleIntent)
+                put("face_geometry", org.json.JSONObject().apply {
+                    put("face_width_height_ratio", first.widthHeightRatio.toDouble())
+                    put("interocular_face_width_ratio", first.interocularFaceWidthRatio.toDouble())
+                    put("jaw_face_width_ratio", first.jawFaceWidthRatio.toDouble())
+                    put("brow_eye_distance_ratio", first.browEyeDistanceRatio.toDouble())
+                    put("brow_asymmetry_ratio", first.browAsymmetryRatio.toDouble())
+                    put("eye_line_tilt", first.eyeLineTilt.toDouble())
+                })
+                put("candidates", org.json.JSONArray().apply {
+                    candidates.forEachIndexed { index, pair ->
+                        val plan = pair.second
+                        val measured = measuredList[index]
+                        put(org.json.JSONObject().apply {
+                            put("style", pair.first)
+                            put("label", plan.name)
+                            put("thickness", plan.params.thickness.toDouble())
+                            put("length", plan.params.length.toDouble())
+                            put("arch", plan.params.arch.toDouble())
+                            put("native_brow_area_fraction", measured.nativeBrowAreaFraction.toDouble())
+                            put("native_brow_side_imbalance", measured.nativeBrowSideImbalance.toDouble())
+                            put("native_brow_mask_available", measured.nativeBrowMaskAvailable.toDouble())
+                            put("native_shape_mode", measured.nativeShapeMode.toDouble())
+                        })
+                    }
+                })
+                put("requested_output", "每款给 0-100 的启发式设计兼容分、基于输入数值的观察、以及明确的不确定性说明")
+            }
+            val apiKey = token.text.toString()
+            dialog.dismiss()
+            Toast.makeText(this, "正在请求外部模型。请求中不包含人脸照片或案例编号。", Toast.LENGTH_LONG).show()
+            Thread {
+                val success = try {
+                    Pair(true, BrowExternalLlm.analyze(rootUrl, modelName, apiKey, payload))
+                } catch (error: Exception) {
+                    Pair(false, error.message ?: "请检查地址、模型名称、网络和提供方额度。")
+                }
+                runOnUiThread {
+                    val resultText = if (success.first) {
+                        "【大模型启发式设计意见，不是概率】\n\n" + success.second
+                    } else {
+                        "外部模型请求失败：" + success.second
+                    }
+                    AlertDialog.Builder(this)
+                        .setTitle("外部模型结果")
+                        .setMessage(resultText)
+                        .setPositiveButton("关闭", null)
+                        .show()
+                }
+            }.start()
+        }
+    }
+
     private fun showModelLicenseNotice() {
         val notice = try {
             assets.open("THIRD_PARTY_MODEL_NOTICES.txt").bufferedReader(Charsets.UTF_8).use { it.readText() }
@@ -2065,6 +2521,7 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("取消", null)
             .setPositiveButton("清除") { _, _ ->
                 getSharedPreferences("brow_preference_feedback", Context.MODE_PRIVATE).edit().clear().apply()
+                getSharedPreferences("brow_choice_feedback", Context.MODE_PRIVATE).edit().clear().apply()
                 getSharedPreferences("brow_curvature_samples", Context.MODE_PRIVATE).edit().clear().apply()
                 getSharedPreferences("brow_transfer_validation", Context.MODE_PRIVATE).edit().clear().apply()
                 savedPlans.forEach { it.segmentationSnapshot?.overlay?.recycle() }
