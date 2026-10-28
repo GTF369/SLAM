@@ -2144,7 +2144,63 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun bitmapToJpegDataUrl(bitmap: Bitmap, maxSide: Int = 1024, quality: Int = 82): String {
+    private fun createLlmCandidateContactSheet(
+        photo: Bitmap,
+        imagePoints: List<PointF>,
+        candidates: List<Pair<String, BrowPlan>>
+    ): Bitmap {
+        require(candidates.size == 3 && imagePoints.size >= 455) {
+            "Three candidates and valid face landmarks are required."
+        }
+        val scale = min(1.0, 600.0 / max(photo.width, photo.height).toDouble()).toFloat()
+        val panelWidth = max(1, (photo.width * scale).roundToInt())
+        val panelHeight = max(1, (photo.height * scale).roundToInt())
+        val headerHeight = 42
+        val sheet = Bitmap.createBitmap(panelWidth * candidates.size, panelHeight + headerHeight, Bitmap.Config.ARGB_8888)
+        val sheetCanvas = Canvas(sheet)
+        sheetCanvas.drawColor(Color.WHITE)
+        val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.DKGRAY
+            textSize = 25f
+            typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+        }
+        val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        val scaledPoints = imagePoints.map { PointF(it.x * scale, it.y * scale) }
+        val optionIds = listOf("A", "B", "C")
+
+        candidates.forEachIndexed { index, pair ->
+            val plan = pair.second
+            val xOffset = index * panelWidth
+            sheetCanvas.drawText("OPTION ${optionIds[index]}", xOffset + 12f, 29f, labelPaint)
+            val panel = Bitmap.createBitmap(panelWidth, panelHeight, Bitmap.Config.ARGB_8888)
+            try {
+                val panelCanvas = Canvas(panel)
+                panelCanvas.drawBitmap(
+                    photo,
+                    null,
+                    RectF(0f, 0f, panelWidth.toFloat(), panelHeight.toFloat()),
+                    imagePaint
+                )
+                // Hold colour constant so the model compares geometry, not preset colour.
+                val neutralParams = plan.params.copy(style = 0)
+                val nativeContours = plan.segmentationSnapshot?.let { BrowRenderer.extractNativeContours(it) }.orEmpty()
+                if (plan.useNativeShape && nativeContours.isNotEmpty()) {
+                    // Native contours remain in source-image coordinates; the renderer scales them onto this panel.
+                    BrowRenderer.drawNativeContours(
+                        panelCanvas, nativeContours, imagePoints, neutralParams, scale, 0f, 0f
+                    )
+                } else {
+                    BrowRenderer.drawBrows(panelCanvas, scaledPoints, neutralParams)
+                }
+                sheetCanvas.drawBitmap(panel, xOffset.toFloat(), headerHeight.toFloat(), imagePaint)
+            } finally {
+                panel.recycle()
+            }
+        }
+        return sheet
+    }
+
+    private fun bitmapToJpegDataUrl(bitmap: Bitmap, maxSide: Int = 1900, quality: Int = 82): String {
         require(!bitmap.isRecycled && bitmap.width > 0 && bitmap.height > 0) {
             "The captured photo is no longer available."
         }
@@ -2180,6 +2236,10 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val candidates = choiceCandidatePlans()
+        val visionDisplayOrder = candidates.shuffled(kotlin.random.Random(System.nanoTime()))
+        val optionByStyle = visionDisplayOrder.mapIndexed { index, pair ->
+            pair.first to listOf("A", "B", "C")[index]
+        }.toMap()
         val endpoint = EditText(this).apply {
             hint = "OpenAI 兼容 API 根地址"
             setSingleLine(true)
@@ -2203,11 +2263,11 @@ class MainActivity : AppCompatActivity() {
             )
         }
         val consent = CheckBox(this).apply {
-            text = "我已取得照片持有者的单独授权，同意将当前人脸照片、匿名化比例特征及三款眉形参数发送给所填写的外部模型。不会发送姓名、联系方式或案例编号。"
+            text = "我已取得照片持有者的单独授权，同意将当前人脸照片生成的三款眉形预览图、匿名化比例特征及候选参数发送给所填写的外部模型。不会发送姓名、联系方式或案例编号。"
             isChecked = false
         }
         val privacyWarning = TextView(this).apply {
-            text = "勾选授权后，会把当前人脸照片上传至你填写的第三方模型服务。请勿上传未经授权的照片。返回的是 AI 设计适配评分，不是经过真实顾客验证的偏好概率。客户端 API 密钥可能被提取，建议使用自有 HTTPS 网关和短期、低权限密钥。"
+            text = "勾选授权后，会把包含当前人脸照片和三款眉形叠加预览的拼图上传至你填写的第三方模型服务。请勿上传未经授权的照片。返回的是 AI 设计适配评分，不是经过真实顾客验证的偏好概率。客户端 API 密钥可能被提取，建议使用自有 HTTPS 网关和短期、低权限密钥。"
             textSize = 12f
             setPadding(0, dp(4), 0, dp(6))
         }
@@ -2253,7 +2313,7 @@ class MainActivity : AppCompatActivity() {
             val first = measuredList.first()
             val styleIntent = intentSpinner.selectedItem.toString()
             val payload = org.json.JSONObject().apply {
-                put("task", "比较三款眉形设计的几何兼容性")
+                put("task", "比较同一人脸照片上的 OPTION A、OPTION B、OPTION C 三款真实渲染的眉形预览，评估视觉几何兼容性；option_id 与各候选参数一一对应")
                 put("design_intent", styleIntent)
                 put("face_geometry", org.json.JSONObject().apply {
                     put("face_width_height_ratio", first.widthHeightRatio.toDouble())
@@ -2269,6 +2329,7 @@ class MainActivity : AppCompatActivity() {
                         val measured = measuredList[index]
                         put(org.json.JSONObject().apply {
                             put("style", pair.first)
+                            put("option_id", optionByStyle[pair.first] ?: "A")
                             put("label", plan.name)
                             put("thickness", plan.params.thickness.toDouble())
                             put("length", plan.params.length.toDouble())
@@ -2284,11 +2345,16 @@ class MainActivity : AppCompatActivity() {
             }
             val apiKey = token.text.toString()
             dialog.dismiss()
-            Toast.makeText(this, "正在请求外部模型。当前照片与匿名化设计参数将发送给所选服务。", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "正在请求外部模型。三款眉形预览拼图与匿名化设计参数将发送给所选服务。", Toast.LENGTH_LONG).show()
             Thread {
                 val success = try {
-                    val photoDataUrl = bitmapToJpegDataUrl(photo)
-                    Pair(true, BrowExternalLlm.analyze(rootUrl, modelName, apiKey, payload, photoDataUrl))
+                    val contactSheet = createLlmCandidateContactSheet(photo, points, visionDisplayOrder)
+                    val previewDataUrl = try {
+                        bitmapToJpegDataUrl(contactSheet)
+                    } finally {
+                        contactSheet.recycle()
+                    }
+                    Pair(true, BrowExternalLlm.analyze(rootUrl, modelName, apiKey, payload, previewDataUrl))
                 } catch (error: Exception) {
                     Pair(false, error.message ?: "请检查地址、模型名称、网络和提供方额度。")
                 }
