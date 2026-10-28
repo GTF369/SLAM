@@ -162,5 +162,5 @@ Direct API keys embedded in a mobile app can be extracted. Prefer a self-control
 - The public-image test is a robustness experiment and has no customer preference labels.
 - Generated synthetic choice rows validate software only and must never train a production model.
 - A properly calibrated model still depends on how candidates are rendered, the population collected and whether customers make unpressured choices.
-- Ratings can be affected by artist presentation, lighting, makeup, novelty and the order of candidates. Use randomized display order in a later prospective study while preserving the style-to-row mapping, and document the protocol.
+- Ratings can be affected by artist presentation, lighting, makeup, novelty and the order of candidates. The app randomizes the displayed candidate order per session and exports each row's display_position so positional bias can be audited. Preserve the style-to-row mapping and document the protocol.
 - The present app records the choice among three fixed styles. It does not yet prove probabilities for arbitrary thickness / length / arch edits outside the trained candidate distribution.
