@@ -61,13 +61,17 @@ The public eyebrow-preference study [*Eyebrow Shape Preference Across Age, Gende
 
 Therefore, do not convert published group averages, geometric rules, synthetic rows, or generic face-attractiveness scores into an advertised probability of a customer's brow preference. The application can emit calibrated probabilities only after the candidate ranking model has been trained and independently checked with consented ratings from the intended feedback process. Until then, keep the transparent geometric reference score.
 
-## 3. Commercial data licensing and privacy
+## 3. Public-image engineering stress test
+
+A reproducible, non-training experiment is available at [docs/PUBLIC_IMAGE_BROW_BENCHMARK.md](../docs/PUBLIC_IMAGE_BROW_BENCHMARK.md) and `ml/public_image_brow_benchmark.py`. It applies the current rule-based ranker to five properly attributed Wikimedia Commons portraits, repeats ranking over fixed image perturbations, records MediaPipe relative-z sensitivity, and sweeps theoretical circular arc/chord factors. Its normalized score weights are **not preference probabilities**, and the image set has no customer-preference labels. The experiment is useful for software robustness and for spotting rule bias only.
+
+## 4. Commercial data licensing and privacy
 
 Do not assume a public face dataset can be used commercially. The official CelebAMask-HQ agreement, for example, limits its images and derived data to non-commercial research and prohibits commercial exploitation. See the [official dataset page](https://mmlab.ie.cuhk.edu.hk/projects/CelebA/CelebAMask_HQ.html). Use it for this product only if the rights holder grants separate written permission.
 
 Prefer consented, purpose-limited salon data with documented authorization for training, validation, deployment and the target market. Keep a dataset register with source, permission/license, permitted uses, collection date, annotation version, retention and deletion status. Downloadable does not mean commercially licensed.
 
-## 4. Curvature measurement and interval analysis
+## 5. Curvature measurement and interval analysis
 
 Run:
 
@@ -87,7 +91,7 @@ For an ideal circular arc with chord (c) and radius (R), (s = 2R\arcsin(c/(2R)))
 
 Follow [CURVATURE_PROTOCOL.md](CURVATURE_PROTOCOL.md): consistent endpoints, repeat measurements, customer-level grouping, staff-to-staff repeatability checks, and an independent 3D or reliable physical reference. Before any factor is embedded in normal printing, validate the expected coverage of the regional interval and measure actual stencil transfer errors on unseen customers.
 
-## 5. Brow-region segmentation
+## 6. Brow-region segmentation
 
 The Android app supports three segmentation paths:
 
@@ -97,7 +101,7 @@ The Android app supports three segmentation paths:
 
 No customer-specific segmentation model is shipped without a consented, professionally annotated dataset. See [MODEL_PROVENANCE.md](../docs/MODEL_PROVENANCE.md) for model source/license caveats and [PRODUCT_VALIDATION_CHECKLIST.md](../docs/PRODUCT_VALIDATION_CHECKLIST.md) for the test gates.
 
-## 6. Remaining production gates
+## 7. Remaining production gates
 
 - Real, consented and professionally reviewed customer feedback and brow-mask annotations.
 - Separate calibration and independent validation sets with disjoint customer IDs.

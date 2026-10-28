@@ -1,0 +1,67 @@
+name: Public-image brow engineering stress test
+on:
+  push:
+    branches:
+      - experiment/public-image-brow-benchmark
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  public-image-benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install experiment dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r ml/requirements.txt mediapipe==0.10.21 opencv-python-headless==4.11.0.86
+      - name: Download public portrait test images
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/public-brow-images
+          curl --fail --location --retry 3 --output /tmp/public-brow-images/mary_lynn_reed.jpg \
+            'https://upload.wikimedia.org/wikipedia/commons/8/89/Mary_Lynn_Reed_in_2023.jpg'
+          curl --fail --location --retry 3 --output /tmp/public-brow-images/myriam_charlier.jpg \
+            'https://upload.wikimedia.org/wikipedia/commons/4/43/Myriam_Charlier%2C_Portrait_%282%29.jpg'
+          curl --fail --location --retry 3 --output /tmp/public-brow-images/dr_mary_yang.jpg \
+            'https://upload.wikimedia.org/wikipedia/commons/2/2b/Dr._Mary_Yang.jpg'
+          curl --fail --location --retry 3 --output /tmp/public-brow-images/female_officer_saluting.jpg \
+            'https://upload.wikimedia.org/wikipedia/commons/5/52/Female_officer_saluting.jpg'
+          curl --fail --location --retry 3 --output /tmp/public-brow-images/judith_driscoll.jpg \
+            'https://upload.wikimedia.org/wikipedia/commons/b/bb/Prof._Judith_Driscoll%2C_University_of_Cambridge.jpg'
+          test "$(find /tmp/public-brow-images -type f | wc -l)" -eq 5
+          find /tmp/public-brow-images -type f -exec file {} \;
+      - name: Download MediaPipe face model
+        run: |
+          curl --fail --location --retry 3 --output /tmp/face_landmarker.task \
+            'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task'
+          test -s /tmp/face_landmarker.task
+      - name: Run public-image adaptation and curvature-sensitivity experiment
+        run: |
+          python ml/public_image_brow_benchmark.py \
+            --image-dir /tmp/public-brow-images \
+            --face-model /tmp/face_landmarker.task \
+            --output-dir /tmp/public-image-brow-report
+      - name: Run geometry and scoring unit tests
+        run: python -m unittest ml/tests/test_public_image_brow_benchmark.py -v
+      - name: Upload numerical report and licence attribution only
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-image-brow-experiment-report
+          path: |
+            /tmp/public-image-brow-report/REPORT.md
+            /tmp/public-image-brow-report/ATTRIBUTION.txt
+            /tmp/public-image-brow-report/public_image_experiment.json
+            /tmp/public-image-brow-report/image_level_results.csv
+            /tmp/public-image-brow-report/candidate_reference_weights.csv
+            /tmp/public-image-brow-report/relative_depth_sensitivity.csv
+            /tmp/public-image-brow-report/synthetic_surface_sensitivity.csv
+          if-no-files-found: error
+          retention-days: 14
