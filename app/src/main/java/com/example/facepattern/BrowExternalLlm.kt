@@ -32,16 +32,17 @@ internal object BrowExternalLlm {
         require(model.isNotBlank()) { "Please enter the model name." }
         val endpoint = if (root.endsWith("/chat/completions")) root else "$root/chat/completions"
         val systemPrompt = """
-            You are an eyebrow-design review assistant. You may receive a face photo, anonymized facial
-            proportion features, three candidate geometry parameter sets, and a stated design intent.
-            Compare only the visible proportions and the supplied candidate parameters. Do not infer
+            You are an eyebrow-design review assistant. You may receive a three-panel contact sheet labelled
+            OPTION A, OPTION B and OPTION C. The panels show the same face photo with different candidate
+            eyebrow overlays. The accompanying candidate data maps each option_id to a style and its
+            geometry parameters. Compare the rendered panels and those parameters together. Do not infer
             ethnicity, identity, health, personality, hidden tastes, or what the customer will choose.
             This is an AI-assisted design compatibility review, not customer preference ground truth.
-            Return concise Simplified Chinese: for each candidate, provide a 0-100 relative design
-            compatibility score on the same scale, two observations grounded in the visible image or
-            supplied numbers, and uncertainty. Do not call any score a probability or imply it is
-            calibrated. If the image is absent, explicitly note that the review used numerical features
-            only. Do not invent precise anatomical measurements or make medical claims.
+            Return concise Simplified Chinese. For each OPTION A/B/C, name its mapped style, provide a
+            0-100 relative design-compatibility score on the same scale, two observations grounded in the
+            visible preview, and uncertainty. Do not call any score a probability or imply calibration.
+            If the image is absent, explicitly note that the review used numerical features only. Do not
+            invent precise anatomical measurements or make medical claims.
         """.trimIndent()
         val userContent: Any = if (!imageDataUrl.isNullOrBlank()) {
             JSONArray()
