@@ -1827,6 +1827,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val candidates = choiceCandidatePlans()
+        val displayOrder = candidates.shuffled(kotlin.random.Random(System.nanoTime()))
         val preparedRows = mutableListOf<org.json.JSONObject>()
         val modelCandidates = mutableListOf<BrowChoiceCandidate>()
         var faceFeatureVector = doubleArrayOf()
@@ -1909,7 +1910,7 @@ class MainActivity : AppCompatActivity() {
         }
         val previews = mutableListOf<Bitmap>()
         val ratings = mutableListOf<android.widget.RatingBar>()
-        candidates.forEach { pair ->
+        displayOrder.forEach { pair ->
             val plan = pair.second
             val preview = BrowRenderer.renderPreview(
                 photo, points, plan.params, 300, plan.segmentationSnapshot, plan.useNativeShape
@@ -1965,10 +1966,10 @@ class MainActivity : AppCompatActivity() {
             orientation = android.widget.RadioGroup.HORIZONTAL
             setPadding(dp(10), 0, dp(10), dp(4))
         }
-        listOf("自然款", "柔和款", "立体款").forEachIndexed { index, label ->
+        displayOrder.forEachIndexed { index, pair ->
             choiceGroup.addView(android.widget.RadioButton(this).apply {
                 id = 100 + index
-                text = label
+                text = pair.second.name
                 textSize = 12f
             }, android.widget.RadioGroup.LayoutParams(0, -2, 1f))
         }
@@ -1997,15 +1998,16 @@ class MainActivity : AppCompatActivity() {
         }
         dialog.show()
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            val selectedIndex = choiceGroup.checkedRadioButtonId - 100
+            val selectedPosition = choiceGroup.checkedRadioButtonId - 100
             if (!consent.isChecked) {
                 Toast.makeText(this, "请先取得并确认顾客的单独授权", Toast.LENGTH_LONG).show()
                 return@setOnClickListener
             }
-            if (selectedIndex !in candidates.indices) {
+            if (selectedPosition !in displayOrder.indices) {
                 Toast.makeText(this, "请先记录顾客最终选择的款式", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
+            val selectedStyle = displayOrder[selectedPosition].first
             val sessionId = UUID.randomUUID().toString()
             val designIntent = when (intentSpinner.selectedItemPosition) {
                 1 -> "偏柔和"
@@ -2017,11 +2019,21 @@ class MainActivity : AppCompatActivity() {
                 getSharedPreferences("brow_choice_feedback", Context.MODE_PRIVATE)
                     .getString("records", "[]")
             )
-            preparedRows.forEachIndexed { index, row ->
+            preparedRows.forEach { row ->
+                val style = row.optString("style")
+                val displayPosition = displayOrder.indexOfFirst { it.first == style }
                 row.put("session_id", sessionId)
                 row.put("design_intent", designIntent)
-                row.put("selected", index == selectedIndex)
-                row.put("rating", if (ratings[index].rating > 0f) ratings[index].rating.roundToInt() else org.json.JSONObject.NULL)
+                row.put("display_position", displayPosition)
+                row.put("selected", style == selectedStyle)
+                row.put(
+                    "rating",
+                    if (displayPosition in ratings.indices && ratings[displayPosition].rating > 0f) {
+                        ratings[displayPosition].rating.roundToInt()
+                    } else {
+                        org.json.JSONObject.NULL
+                    }
+                )
                 row.put("timestamp", timestamp)
                 dataset.put(row)
             }
@@ -2037,7 +2049,11 @@ class MainActivity : AppCompatActivity() {
             } catch (_: Exception) {
                 null
             }
-            val selectedLabel = listOf("自然款", "柔和款", "立体款")[selectedIndex]
+            val selectedLabel = when (selectedStyle) {
+                "soft" -> "柔和款"
+                "defined" -> "立体款"
+                else -> "自然款"
+            }
             val resultText = if (prediction != null && prediction.size == 3) {
                 "本次顾客实际选择：" + selectedLabel + "\n\n经独立真实顾客数据校准、外部验证并审核的模型，对本次三款候选给出的条件偏好估计：\n" +
                     "自然款：" + String.format(java.util.Locale.getDefault(), "%.1f", prediction[0] * 100.0) + "%\n" +
@@ -2066,7 +2082,7 @@ class MainActivity : AppCompatActivity() {
         }
         fun csvCell(value: String): String = "\"" + value.replace("\"", "\"\"") + "\""
         val csv = buildString {
-            append("case_id,session_id,style,thickness,length,arch,selected,design_intent,face_width_height_ratio,interocular_face_width_ratio,jaw_face_width_ratio,brow_eye_distance_ratio,brow_asymmetry_ratio,eye_line_tilt,native_brow_area_fraction,native_brow_side_imbalance,native_brow_mask_available,native_shape_mode,rating,timestamp\n")
+            append("case_id,session_id,style,thickness,length,arch,selected,display_position,design_intent,face_width_height_ratio,interocular_face_width_ratio,jaw_face_width_ratio,brow_eye_distance_ratio,brow_asymmetry_ratio,eye_line_tilt,native_brow_area_fraction,native_brow_side_imbalance,native_brow_mask_available,native_shape_mode,rating,timestamp\n")
             for (i in 0 until records.length()) {
                 val row = records.optJSONObject(i) ?: continue
                 append(csvCell(row.optString("case_id"))).append(',')
