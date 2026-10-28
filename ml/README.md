@@ -151,11 +151,25 @@ python ml/train_brow_choice_ranker.py ml/data_splits/choice/development.csv \
 
 Do not run the review flag just to produce percentages. The Android app loads `brow_choice_ranker.json` only when it is version 2 or newer, declares `model_type=conditional_choice`, includes temperature calibration, and has `release_approved: true`. If no such model exists, the app records the real choice but deliberately displays no probability. Once approved, probabilities are **conditional on the three rendered candidates and the feedback protocol**; they are not objective attractiveness, universal suitability or a guaranteed treatment outcome.
 
-### 3. External LLM review is optional and not training truth
+### 3. External vision-model review is optional and not training truth
 
-The app includes an optional OpenAI-compatible Chat Completions adapter. At runtime, the user enters a supported endpoint and model ID and explicitly confirms customer consent. It sends only numerical ratios, the three candidate parameters and the stated design intent; it does not send the portrait or anonymous case/session IDs. LLM output is an **uncalibrated compatibility opinion**, never the ground-truth label and never a customer preference probability. It must not be silently mixed into the customer-choice training CSV.
+The app includes an optional OpenAI-compatible Chat Completions adapter. At runtime, the user enters a supported endpoint and model ID. The consent checkbox explicitly warns that the **current face photo**, numerical proportions, three candidate parameter sets and stated design intent are sent to that external service. The request omits case/session IDs, names and contact details. Do not send any photo unless the photo holder has given specific permission for that processing. The result is an **AI design-compatibility opinion**, not a calibrated preference probability, and it is not silently mixed into customer-choice feedback.
 
 Direct API keys embedded in a mobile app can be extracted. Prefer a self-controlled HTTPS proxy that holds provider credentials server-side, uses usage limits and does not log faces or identifiers. The in-app entry is intended for controlled personal testing rather than a secure multi-user deployment.
+
+### 4. Run the public-portrait vision-model pseudo-label pilot
+
+A manual GitHub Actions workflow can ask a vision-capable model to compare three simplified eyebrow overlays against each of the five licence-attributed public portraits used by the engineering benchmark. The A/B/C order is shuffled on each repeat to reduce label and position bias. The workflow makes 3–9 model calls per portrait and uploads numerical results, model-generated notes, a CSV in the conditional-choice trainer's input format, and the licence manifest. It does not upload the preview images.
+
+To run it:
+
+1. Add an API credential as the repository Actions secret `OPENAI_API_KEY`. Do not commit it or paste it into the repository source.
+2. Open **Actions → Vision-model brow pseudo-label pilot → Run workflow**, choose a vision-capable model supported by the API project, and set 3–9 repeats. Repeated calls incur API charges.
+3. Download the `llm-brow-pseudolabel-pilot` artifact and inspect `REPORT.md`, `llm_candidate_judgments.csv`, and `image_level_pseudo_scores.csv`.
+
+The file `pseudo_choice_training_format.csv` intentionally uses the same column format as the conditional-choice trainer, but its `selected` label is the model's top-ranked option, not a human decision. It is included only for pipeline experiments and must **not** be used as customer-choice training truth, calibration data, or external validation data. Repeating one model over one image produces correlated judgements, not additional people. The five-portrait run is a pilot, not enough evidence to release or calibrate a customer probability model.
+
+The model's *AI top-rank frequency* reports how often the model selected a style across randomized prompts. It is not an estimate of the probability that a customer would select it. The online model is not actually predicting each photographed person's private taste; it is applying a generic design rubric to a photo and simple rendered overlays. A more defensible label is **AI-assisted design-compatibility estimate**. The app's external review currently gives relative 0–100 scores; it never converts those scores to customer probabilities.
 
 ### 4. Known evidence limits
 
