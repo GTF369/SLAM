@@ -65,7 +65,7 @@ Do not assume a public face dataset can be used commercially. The official Celeb
 
 Prefer consented, purpose-limited salon data with documented authorization for training, validation, deployment and the target market. Keep a dataset register with source, permission/license, permitted uses, collection date, annotation version, retention and deletion status. Downloadable does not mean commercially licensed.
 
-## 3. Curvature measurement and interval analysis
+## 4. Curvature measurement and interval analysis
 
 Run:
 
@@ -85,7 +85,7 @@ For an ideal circular arc with chord (c) and radius (R), (s = 2R\arcsin(c/(2R)))
 
 Follow [CURVATURE_PROTOCOL.md](CURVATURE_PROTOCOL.md): consistent endpoints, repeat measurements, customer-level grouping, staff-to-staff repeatability checks, and an independent 3D or reliable physical reference. Before any factor is embedded in normal printing, validate the expected coverage of the regional interval and measure actual stencil transfer errors on unseen customers.
 
-## 4. Brow-region segmentation
+## 5. Brow-region segmentation
 
 The Android app supports three segmentation paths:
 
