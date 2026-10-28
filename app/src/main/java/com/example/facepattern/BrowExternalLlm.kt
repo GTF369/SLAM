@@ -7,15 +7,17 @@ import java.net.URL
 
 /**
  * Optional, user-triggered OpenAI-compatible Chat Completions adapter.
- * It sends numeric geometry and candidate parameters only, never the portrait or case ID.
- * The returned model score is an uncalibrated design opinion, not a customer preference probability.
+ * A portrait is sent only when the user has explicitly accepted the external-processing consent.
+ * Candidate parameters are sent without case ID, name, contact details, or other direct identifiers.
+ * Returned scores are AI design opinions, never calibrated customer-preference probabilities.
  */
 internal object BrowExternalLlm {
     fun analyze(
         baseUrl: String,
         model: String,
         apiKey: String,
-        payload: JSONObject
+        payload: JSONObject,
+        imageDataUrl: String? = null
     ): String {
         val root = baseUrl.trim().trimEnd('/')
         val parsedEndpoint = try { URL(root) } catch (error: Exception) {
@@ -30,23 +32,34 @@ internal object BrowExternalLlm {
         require(model.isNotBlank()) { "Please enter the model name." }
         val endpoint = if (root.endsWith("/chat/completions")) root else "$root/chat/completions"
         val systemPrompt = """
-            You are an eyebrow-design review assistant. You will receive only anonymized numerical
-            facial-proportion features, candidate geometry parameters, and a stated style intent.
-            You will NOT receive a face photograph or customer identity. Do not claim to know the
-            customer's hidden tastes, beauty, ethnicity, health, or identity. Do not claim to calculate
-            the probability that a real customer will like a candidate. Return a comparative engineering
-            opinion only. Output concise Simplified Chinese with candidate style, a 0-100 heuristic
-            design-compatibility score, two grounded observations tied to the supplied numerical input,
-            and a clear uncertainty note. The score is not a probability and is not calibrated.
-            Avoid inventing precise anatomy or making medical claims.
+            You are an eyebrow-design review assistant. You may receive a three-panel contact sheet labelled
+            OPTION A, OPTION B and OPTION C. The panels show the same face photo with different candidate
+            eyebrow overlays. The accompanying candidate data maps each option_id to a style and its
+            geometry parameters. Compare the rendered panels and those parameters together. Do not infer
+            ethnicity, identity, health, personality, hidden tastes, or what the customer will choose.
+            This is an AI-assisted design compatibility review, not customer preference ground truth.
+            Return concise Simplified Chinese. For each OPTION A/B/C, name its mapped style, provide a
+            0-100 relative design-compatibility score on the same scale, two observations grounded in the
+            visible preview, and uncertainty. Do not call any score a probability or imply calibration.
+            If the image is absent, explicitly note that the review used numerical features only. Do not
+            invent precise anatomical measurements or make medical claims.
         """.trimIndent()
+        val userContent: Any = if (!imageDataUrl.isNullOrBlank()) {
+            JSONArray()
+                .put(JSONObject().put("type", "text").put("text", payload.toString()))
+                .put(JSONObject().put("type", "image_url").put(
+                    "image_url", JSONObject().put("url", imageDataUrl).put("detail", "high")
+                ))
+        } else {
+            payload.toString()
+        }
         val requestBody = JSONObject().apply {
             put("model", model.trim())
             put("temperature", 0.2)
             put("stream", false)
             put("messages", JSONArray()
                 .put(JSONObject().put("role", "system").put("content", systemPrompt))
-                .put(JSONObject().put("role", "user").put("content", payload.toString())))
+                .put(JSONObject().put("role", "user").put("content", userContent)))
         }
 
         val connection = URL(endpoint).openConnection() as HttpURLConnection
