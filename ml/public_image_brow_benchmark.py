@@ -16,7 +16,6 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-import cv2
 import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +24,16 @@ if str(ML_DIR) not in sys.path:
     sys.path.insert(0, str(ML_DIR))
 
 from train_brow_ranker import geometric_reference_scores
+
+
+def _load_cv2():
+    """Load OpenCV only for image operations so pure geometry tests need no cv2 wheel."""
+    try:
+        import cv2 as cv2_module
+    except ImportError as exc:
+        raise RuntimeError("Install opencv-python-headless to run image processing.") from exc
+    return cv2_module
+
 
 CANDIDATES = (
     {"style": "natural", "thickness": 1.00, "length": 1.00, "arch": 0.92, "style_index": 0},
@@ -68,6 +77,7 @@ SOURCES = {
 
 
 def resize_for_test(image: np.ndarray, max_side: int = MAX_IMAGE_SIDE) -> np.ndarray:
+    cv2 = _load_cv2()
     h, w = image.shape[:2]
     largest = max(h, w)
     if largest <= max_side:
@@ -106,6 +116,7 @@ def relative_depth_factor(planar_px: float, depth_delta_px: float) -> float:
 
 def image_augmentations(image: np.ndarray) -> list[tuple[str, np.ndarray]]:
     """Fixed acquisition perturbations. They are repeated views, not independent people."""
+    cv2 = _load_cv2()
     h, w = image.shape[:2]
     variants: list[tuple[str, np.ndarray]] = [("original", image.copy())]
     variants.extend([
@@ -247,6 +258,7 @@ def candidate_brow_curve(points: np.ndarray, landmark_ids: Iterable[int], *, len
 
 
 def draw_candidate(image: np.ndarray, points: np.ndarray, candidate: dict[str, Any], label: str) -> np.ndarray:
+    cv2 = _load_cv2()
     overlay = image.copy()
     interocular_px = float(np.linalg.norm(points[33, :2] - points[263, :2]))
     line_width = max(2, int(round(interocular_px * 0.042 * float(candidate["thickness"]))))
@@ -302,6 +314,7 @@ def import_landmarker(model_path: Path):
 
 
 def detect_points(mp: Any, landmarker: Any, image: np.ndarray) -> np.ndarray | None:
+    cv2 = _load_cv2()
     if image is None or image.size == 0:
         return None
     rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -330,6 +343,7 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def run_experiment(image_dir: Path, face_model: Path, output_dir: Path) -> dict[str, Any]:
+    cv2 = _load_cv2()
     output_dir.mkdir(parents=True, exist_ok=True)
     private_preview_dir = output_dir / "_private_previews"
     private_preview_dir.mkdir(parents=True, exist_ok=True)
