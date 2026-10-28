@@ -18,10 +18,15 @@ internal object BrowExternalLlm {
         payload: JSONObject
     ): String {
         val root = baseUrl.trim().trimEnd('/')
-        require(root.startsWith("https://") || root.startsWith("http://10.0.2.2") ||
-            root.startsWith("http://127.0.0.1") || root.startsWith("http://localhost")) {
-            "Remote model endpoints must use HTTPS."
+        val parsedEndpoint = try { URL(root) } catch (error: Exception) {
+            throw IllegalArgumentException("Invalid endpoint URL.", error)
         }
+        val isLocalHttp = parsedEndpoint.protocol == "http" &&
+            parsedEndpoint.host.lowercase() in setOf("10.0.2.2", "127.0.0.1", "localhost")
+        require(parsedEndpoint.protocol == "https" || isLocalHttp) {
+            "Remote model endpoints must use HTTPS. Plain HTTP is allowed only for localhost development."
+        }
+        require(parsedEndpoint.userInfo == null) { "Do not embed credentials in the endpoint URL." }
         require(model.isNotBlank()) { "Please enter the model name." }
         val endpoint = if (root.endsWith("/chat/completions")) root else "$root/chat/completions"
         val systemPrompt = """
