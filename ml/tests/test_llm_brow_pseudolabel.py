@@ -5,13 +5,19 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from llm_brow_pseudolabel import (  # noqa: E402
-    CANDIDATES,
-    OUTPUT_SCHEMA,
-    draw_blind_candidate,
-    make_contact_sheet,
-    validate_judgment,
-)
+try:
+    import cv2  # noqa: F401
+    import openai  # noqa: F401
+    from llm_brow_pseudolabel import (  # noqa: E402
+        CANDIDATES,
+        OUTPUT_SCHEMA,
+        draw_blind_candidate,
+        make_contact_sheet,
+        validate_judgment,
+    )
+    OPTIONAL_DEPS_AVAILABLE = True
+except ImportError:
+    OPTIONAL_DEPS_AVAILABLE = False
 
 
 def valid_judgment():
@@ -30,6 +36,7 @@ def valid_judgment():
     }
 
 
+@unittest.skipUnless(OPTIONAL_DEPS_AVAILABLE, "Optional OpenCV and OpenAI SDK dependencies are installed in the dedicated pseudolabel workflow.")
 class PseudoLabelTests(unittest.TestCase):
     def test_schema_has_explicit_three_option_output(self):
         self.assertEqual(OUTPUT_SCHEMA["properties"]["scores"]["minItems"], 3)
