@@ -124,6 +124,7 @@ internal class BrowChoiceRanker private constructor(
                 if (json.optString("model_type") != "conditional_choice") return null
                 if (!json.optBoolean("release_approved", false)) return null
                 if (json.optString("calibration_status") != "temperature_scaling") return null
+                if (json.optJSONObject("external_validation")?.optBoolean("passed_release_gates", false) != true) return null
 
                 fun readArray(name: String): DoubleArray {
                     val array = json.getJSONArray(name)
