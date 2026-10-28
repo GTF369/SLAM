@@ -2092,6 +2092,7 @@ class MainActivity : AppCompatActivity() {
                 append(row.optDouble("length")).append(',')
                 append(row.optDouble("arch")).append(',')
                 append(row.optBoolean("selected")).append(',')
+                append(row.optInt("display_position", -1)).append(',')
                 append(csvCell(row.optString("design_intent"))).append(',')
                 append(row.optDouble("face_width_height_ratio")).append(',')
                 append(row.optDouble("interocular_face_width_ratio")).append(',')
