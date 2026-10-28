@@ -1,0 +1,88 @@
+name: Vision-model brow pseudo-label pilot
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Vision-capable model name available to your API project"
+        required: true
+        default: "gpt-4o"
+        type: string
+      repeats:
+        description: "Blind randomized re-ratings per portrait (3–9)"
+        required: true
+        default: "5"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  vision-pseudolabel-pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BROW_VISION_MODEL: ${{ inputs.model }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install scoring and face-landmark dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r ml/requirements-llm-pseudolabel.txt
+      - name: Check API credential is configured
+        shell: bash
+        run: |
+          if [ -z "${OPENAI_API_KEY}" ]; then
+            echo "::error::Add OPENAI_API_KEY under repository Settings > Secrets and variables > Actions, then rerun this workflow."
+            exit 1
+          fi
+      - name: Download the five licence-attributed public portraits
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/public-brow-images
+          curl --fail --location --retry 3 --output /tmp/public-brow-images/mary_lynn_reed.jpg \
+            'https://upload.wikimedia.org/wikipedia/commons/8/89/Mary_Lynn_Reed_in_2023.jpg'
+          curl --fail --location --retry 3 --output /tmp/public-brow-images/myriam_charlier.jpg \
+            'https://upload.wikimedia.org/wikipedia/commons/4/43/Myriam_Charlier%2C_Portrait_%282%29.jpg'
+          curl --fail --location --retry 3 --output /tmp/public-brow-images/dr_mary_yang.jpg \
+            'https://upload.wikimedia.org/wikipedia/commons/2/2b/Dr._Mary_Yang.jpg'
+          curl --fail --location --retry 3 --output /tmp/public-brow-images/female_officer_saluting.jpg \
+            'https://upload.wikimedia.org/wikipedia/commons/5/52/Female_officer_saluting.jpg'
+          curl --fail --location --retry 3 --output /tmp/public-brow-images/judith_driscoll.jpg \
+            'https://upload.wikimedia.org/wikipedia/commons/b/bb/Prof._Judith_Driscoll,_University_of_Cambridge.jpg'
+          test "$(find /tmp/public-brow-images -type f | wc -l)" -eq 5
+      - name: Download MediaPipe face-landmark model
+        run: |
+          curl --fail --location --retry 3 --output /tmp/face_landmarker.task \
+            'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task'
+          test -s /tmp/face_landmarker.task
+      - name: Run blind vision-model ratings
+        run: |
+          python ml/llm_brow_pseudolabel.py \
+            --image-dir /tmp/public-brow-images \
+            --face-model /tmp/face_landmarker.task \
+            --output-dir /tmp/llm-brow-pseudolabel-report \
+            --model "${OPENAI_BROW_VISION_MODEL}" \
+            --repeats "${{ inputs.repeats }}"
+      - name: Test response validation and preview generation
+        run: python -m unittest ml/tests/test_llm_brow_pseudolabel.py -v
+      - name: Upload numerical scores, pseudo-labels, and licences only
+        uses: actions/upload-artifact@v4
+        with:
+          name: llm-brow-pseudolabel-pilot
+          path: |
+            /tmp/llm-brow-pseudolabel-report/REPORT.md
+            /tmp/llm-brow-pseudolabel-report/metadata.json
+            /tmp/llm-brow-pseudolabel-report/llm_candidate_judgments.csv
+            /tmp/llm-brow-pseudolabel-report/pseudo_choice_training_format.csv
+            /tmp/llm-brow-pseudolabel-report/image_level_pseudo_scores.csv
+            /tmp/llm-brow-pseudolabel-report/api_errors.csv
+          if-no-files-found: error
+          retention-days: 14
