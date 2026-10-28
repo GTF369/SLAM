@@ -53,13 +53,19 @@ Only a version-3 JSON explicitly marked `release_approved: true`, with a separat
 
 The model now includes four extra inputs: reviewed native-brow area fraction, left/right mask-area imbalance, mask-reviewed availability, and whether the native contour was used for this candidate. Mask statistics are only collected when the artist explicitly confirms the detected mask via “完成修正” or selects “以原生眉形作底稿”. The target label is rating 4–5 versus 1–3. The `selected` field remains available for audit but is not an input to the model. A selected candidate and a high rating are related but not interchangeable. Before commercial use, evaluate top-k selection, performance across face shapes and capture conditions, subgroup errors, confidence intervals, data drift and the way ratings were collected.
 
-## 2. Commercial data licensing and privacy
+## 2. What public models and datasets can and cannot provide
+
+The public eyebrow-preference study [*Eyebrow Shape Preference Across Age, Gender, and Self-reported Ethnic Group*](https://doi.org/10.1097/dss.0000000000003679) reports survey results from 652 respondents, but the publication itself is not a ready-to-load Android model or a verified case-level training CSV containing each face, candidate parameters, and ratings. A periorbital segmentation dataset can help label or detect eyebrow pixels, but mask labels do not tell us whether a particular customer likes a candidate. I did not find a publicly downloadable, clearly licensed, customer-level preference dataset that can legitimately serve as this app's calibrated model.
+
+Therefore, do not convert published group averages, geometric rules, synthetic rows, or generic face-attractiveness scores into an advertised probability of a customer's brow preference. The application can emit calibrated probabilities only after the candidate ranking model has been trained and independently checked with consented ratings from the intended feedback process. Until then, keep the transparent geometric reference score.
+
+## 3. Commercial data licensing and privacy
 
 Do not assume a public face dataset can be used commercially. The official CelebAMask-HQ agreement, for example, limits its images and derived data to non-commercial research and prohibits commercial exploitation. See the [official dataset page](https://mmlab.ie.cuhk.edu.hk/projects/CelebA/CelebAMask_HQ.html). Use it for this product only if the rights holder grants separate written permission.
 
 Prefer consented, purpose-limited salon data with documented authorization for training, validation, deployment and the target market. Keep a dataset register with source, permission/license, permitted uses, collection date, annotation version, retention and deletion status. Downloadable does not mean commercially licensed.
 
-## 3. Curvature measurement and interval analysis
+## 4. Curvature measurement and interval analysis
 
 Run:
 
@@ -79,7 +85,7 @@ For an ideal circular arc with chord (c) and radius (R), (s = 2R\arcsin(c/(2R)))
 
 Follow [CURVATURE_PROTOCOL.md](CURVATURE_PROTOCOL.md): consistent endpoints, repeat measurements, customer-level grouping, staff-to-staff repeatability checks, and an independent 3D or reliable physical reference. Before any factor is embedded in normal printing, validate the expected coverage of the regional interval and measure actual stencil transfer errors on unseen customers.
 
-## 4. Brow-region segmentation
+## 5. Brow-region segmentation
 
 The Android app supports three segmentation paths:
 
@@ -89,7 +95,7 @@ The Android app supports three segmentation paths:
 
 No customer-specific segmentation model is shipped without a consented, professionally annotated dataset. See [MODEL_PROVENANCE.md](../docs/MODEL_PROVENANCE.md) for model source/license caveats and [PRODUCT_VALIDATION_CHECKLIST.md](../docs/PRODUCT_VALIDATION_CHECKLIST.md) for the test gates.
 
-## 5. Remaining production gates
+## 6. Remaining production gates
 
 - Real, consented and professionally reviewed customer feedback and brow-mask annotations.
 - Separate calibration and independent validation sets with disjoint customer IDs.
