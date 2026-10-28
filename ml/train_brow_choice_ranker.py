@@ -192,7 +192,8 @@ def build_choice_sessions(rows: list[dict[str, str]], source: str = "CSV") -> li
         if not case_id or not session_id:
             raise ValueError(
                 f"{source} row {row_num} needs stable case_id and session_id. "
-                "Export feedback from the updated app; older CSVs do not contain session_id."
+                "The current APK export does not contain session_id. Prepare a session CSV with exactly three style candidates " +
+                "(natural, soft, defined) per session and exactly one selected candidate before using this experimental trainer."
             )
         grouped.setdefault(session_id, []).append((row, row_num))
 
@@ -475,7 +476,7 @@ def main() -> None:
     parser.add_argument("development_csv", type=Path)
     parser.add_argument("--calibration-csv", type=Path, required=True)
     parser.add_argument("--external-validation-csv", type=Path, required=True)
-    parser.add_argument("--output", type=Path, default=Path("app/src/main/assets/brow_choice_ranker.json"))
+    parser.add_argument("--output", type=Path, default=Path("ml/output/brow_choice_ranker_candidate.json"))
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--mark-reviewed-after-human-review", action="store_true")
     args = parser.parse_args()
