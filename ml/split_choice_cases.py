@@ -64,6 +64,31 @@ def split_rows(
     development_fraction: float = 0.40,
     calibration_fraction: float = 0.20,
 ) -> dict[str, list[dict[str, str]]]:
+    by_session: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for row in rows:
+        by_session[row.get("session_id", "").strip()].append(row)
+    for session_id, records in by_session.items():
+        case_ids = {row.get("case_id", "").strip() for row in records}
+        styles = [row.get("style", "").strip().lower() for row in records]
+        selected_count = sum(
+            row.get("selected", "").strip().lower() in {"true", "1", "yes"}
+            for row in records
+        )
+        if (
+            not session_id
+            or len(records) != 3
+            or len(case_ids) != 1
+            or "" in case_ids
+            or set(styles) != EXPECTED_STYLES
+            or len(set(styles)) != 3
+        ):
+            raise ValueError(
+                f"Session {session_id!r} must contain exactly natural, soft and defined "
+                "once each for one customer."
+            )
+        if selected_count != 1:
+            raise ValueError(f"Session {session_id!r} must contain exactly one selected candidate.")
+
     if not (0.0 < development_fraction < 1.0):
         raise ValueError("development_fraction must lie strictly between 0 and 1.")
     if not (0.0 < calibration_fraction < 1.0):
