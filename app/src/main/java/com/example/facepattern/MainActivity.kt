@@ -1882,38 +1882,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun clearLocalRecords() {
-        AlertDialog.Builder(this)
-            .setTitle("清除应用内记录")
-            .setMessage("将删除本机保存的匿名偏好反馈、曲率测量和转印误差记录。已导出的 CSV 文件和已保存到相册的设计图不会自动删除，需要到下载目录或相册中单独清除。此操作无法撤销。")
-            .setNegativeButton("取消", null)
-            .setPositiveButton("清除") { _, _ ->
-                getSharedPreferences("brow_preference_feedback", Context.MODE_PRIVATE).edit().clear().apply()
-                getSharedPreferences("brow_curvature_samples", Context.MODE_PRIVATE).edit().clear().apply()
-                getSharedPreferences("brow_transfer_validation", Context.MODE_PRIVATE).edit().clear().apply()
-                savedPlans.forEach { it.segmentationSnapshot?.overlay?.recycle() }
-                savedPlans.clear()
-                refreshPlanButtons()
-                Toast.makeText(this, "应用内匿名记录已清除", Toast.LENGTH_LONG).show()
-            }
-            .show()
-    }
-
-    private val curvatureRegionNames = listOf(
-        "左眉头", "左眉身", "左眉峰", "左眉尾",
-        "右眉头", "右眉身", "右眉峰", "右眉尾"
-    )
-
     /**
-     * Record transfer measurements under the exact printer/media/driver profile used.
-     * This is an audit trail only; it never trains or enables a correction automatically.
+     * Record physical stencil-transfer measurements for one fixed printer profile.
+     * These are an audit trail, not an automatic 3D reconstruction or correction approval.
      */
     private fun showTransferValidationRecord() {
+        val prefs = getSharedPreferences("brow_transfer_validation", Context.MODE_PRIVATE)
         val profileField = EditText(this).apply {
             hint = "打印配置唯一名称（打印机/驱动/纸张/方向/缩放）"
             setSingleLine(true)
-            setText(getSharedPreferences("brow_transfer_validation", Context.MODE_PRIVATE)
-                .getString("last_printer_profile", ""))
+            setText(prefs.getString("last_printer_profile", ""))
         }
         val region = android.widget.Spinner(this).apply {
             adapter = android.widget.ArrayAdapter(
@@ -1980,7 +1958,7 @@ class MainActivity : AppCompatActivity() {
                 val arcMm = surfaceArc.text.toString().toFloatOrNull()
                 val templateMm = templatePath.text.toString().toFloatOrNull()
                 val endpointText = endpointError.text.toString().trim()
-                val endpointMm = if (endpointText.isEmpty()) null else endpointText.toString().toFloatOrNull()
+                val endpointMm = if (endpointText.isEmpty()) null else endpointText.toFloatOrNull()
                 val boxMm = calibrationBox.text.toString().toFloatOrNull()
                 if (profile.length < 3 || arcMm == null || templateMm == null || boxMm == null ||
                     !arcMm.isFinite() || !templateMm.isFinite() || !boxMm.isFinite() ||
@@ -1994,7 +1972,6 @@ class MainActivity : AppCompatActivity() {
                     return@setPositiveButton
                 }
                 val signedError = templateMm - arcMm
-                val prefs = getSharedPreferences("brow_transfer_validation", Context.MODE_PRIVATE)
                 val records = org.json.JSONArray(prefs.getString("records", "[]"))
                 val record = org.json.JSONObject().apply {
                     put("case_id", currentCaseId.trim())
@@ -2084,6 +2061,25 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle("清除应用内记录")
             .setMessage("将删除本机保存的匿名偏好反馈、曲率测量和转印误差记录。已导出的 CSV 文件和已保存到相册的设计图不会自动删除，需要到下载目录或相册中单独清除。此操作无法撤销。")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("清除") { _, _ ->
+                getSharedPreferences("brow_preference_feedback", Context.MODE_PRIVATE).edit().clear().apply()
+                getSharedPreferences("brow_curvature_samples", Context.MODE_PRIVATE).edit().clear().apply()
+                getSharedPreferences("brow_transfer_validation", Context.MODE_PRIVATE).edit().clear().apply()
+                savedPlans.forEach { it.segmentationSnapshot?.overlay?.recycle() }
+                savedPlans.clear()
+                refreshPlanButtons()
+                Toast.makeText(this, "应用内匿名记录已清除", Toast.LENGTH_LONG).show()
+            }
+            .show()
+    }
+
+    private val curvatureRegionNames = listOf(
+        "左眉头", "左眉身", "左眉峰", "左眉尾",
+        "右眉头", "右眉身", "右眉峰", "右眉尾"
+    )
+
+    private fun currentCurvatureFactorsForPrint(): Map<String, Float> {
         val records = org.json.JSONArray(
             getSharedPreferences("brow_curvature_samples", Context.MODE_PRIVATE).getString("records", "[]")
         )
@@ -2096,8 +2092,8 @@ class MainActivity : AppCompatActivity() {
             if (region !in curvatureRegionNames || !factor.isFinite() || factor !in 1.0f..1.5708f) continue
             valuesByRegion.getOrPut(region) { mutableListOf() }.add(factor)
         }
-        // Require at least three repeated measurements per region for a current-case
-        // correction. A single entered length is too sensitive to endpoint placement error.
+        // Require at least three repeated physical measurements per region before
+        // applying a current-case correction. This reduces single-reading noise.
         return valuesByRegion.mapNotNull { (region, factors) ->
             if (factors.size < 3) {
                 null
