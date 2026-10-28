@@ -2025,6 +2025,9 @@ class MainActivity : AppCompatActivity() {
                 row.put("session_id", sessionId)
                 row.put("design_intent", designIntent)
                 row.put("display_position", displayPosition)
+                row.put("consent_recorded", true)
+                row.put("consent_version", "brow-choice-v1")
+                row.put("consent_timestamp", timestamp)
                 row.put("selected", style == selectedStyle)
                 row.put(
                     "rating",
@@ -2082,7 +2085,7 @@ class MainActivity : AppCompatActivity() {
         }
         fun csvCell(value: String): String = "\"" + value.replace("\"", "\"\"") + "\""
         val csv = buildString {
-            append("case_id,session_id,style,thickness,length,arch,selected,display_position,design_intent,face_width_height_ratio,interocular_face_width_ratio,jaw_face_width_ratio,brow_eye_distance_ratio,brow_asymmetry_ratio,eye_line_tilt,native_brow_area_fraction,native_brow_side_imbalance,native_brow_mask_available,native_shape_mode,rating,timestamp\n")
+            append("case_id,session_id,style,thickness,length,arch,selected,display_position,consent_recorded,consent_version,consent_timestamp,design_intent,face_width_height_ratio,interocular_face_width_ratio,jaw_face_width_ratio,brow_eye_distance_ratio,brow_asymmetry_ratio,eye_line_tilt,native_brow_area_fraction,native_brow_side_imbalance,native_brow_mask_available,native_shape_mode,rating,timestamp\n")
             for (i in 0 until records.length()) {
                 val row = records.optJSONObject(i) ?: continue
                 append(csvCell(row.optString("case_id"))).append(',')
@@ -2093,6 +2096,9 @@ class MainActivity : AppCompatActivity() {
                 append(row.optDouble("arch")).append(',')
                 append(row.optBoolean("selected")).append(',')
                 append(row.optInt("display_position", -1)).append(',')
+                append(row.optBoolean("consent_recorded")).append(',')
+                append(csvCell(row.optString("consent_version"))).append(',')
+                append(row.optLong("consent_timestamp")).append(',')
                 append(csvCell(row.optString("design_intent"))).append(',')
                 append(row.optDouble("face_width_height_ratio")).append(',')
                 append(row.optDouble("interocular_face_width_ratio")).append(',')
