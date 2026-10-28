@@ -335,6 +335,10 @@ class MainActivity : AppCompatActivity() {
             "曲率标定" to { showCurvatureCalibration() },
             "重新拍摄" to { retakePhoto() }
         ))
+        addButtonRow(designControls, listOf(
+            "转印误差记录" to { showTransferValidationRecord() },
+            "导出转印数据" to { exportTransferValidationCsv() }
+        ))
         val note = TextView(this).apply {
             text = "打印前需实测瞳距。打印页附 20 mm 校准框，打印后务必量取确认。单张正面照不能可靠恢复眉弓三维曲率，本版不自动做三维曲面校正。"
             textSize = 11f
@@ -1881,11 +1885,12 @@ class MainActivity : AppCompatActivity() {
     private fun clearLocalRecords() {
         AlertDialog.Builder(this)
             .setTitle("清除应用内记录")
-            .setMessage("将删除本机保存的匿名偏好反馈与曲率测量记录。已导出的 CSV 文件和已保存到相册的设计图不会自动删除，需要到下载目录或相册中单独清除。此操作无法撤销。")
+            .setMessage("将删除本机保存的匿名偏好反馈、曲率测量和转印误差记录。已导出的 CSV 文件和已保存到相册的设计图不会自动删除，需要到下载目录或相册中单独清除。此操作无法撤销。")
             .setNegativeButton("取消", null)
             .setPositiveButton("清除") { _, _ ->
                 getSharedPreferences("brow_preference_feedback", Context.MODE_PRIVATE).edit().clear().apply()
                 getSharedPreferences("brow_curvature_samples", Context.MODE_PRIVATE).edit().clear().apply()
+                getSharedPreferences("brow_transfer_validation", Context.MODE_PRIVATE).edit().clear().apply()
                 savedPlans.forEach { it.segmentationSnapshot?.overlay?.recycle() }
                 savedPlans.clear()
                 refreshPlanButtons()
@@ -1899,7 +1904,186 @@ class MainActivity : AppCompatActivity() {
         "右眉头", "右眉身", "右眉峰", "右眉尾"
     )
 
-    private fun currentCurvatureFactorsForPrint(): Map<String, Float> {
+    /**
+     * Record transfer measurements under the exact printer/media/driver profile used.
+     * This is an audit trail only; it never trains or enables a correction automatically.
+     */
+    private fun showTransferValidationRecord() {
+        val profileField = EditText(this).apply {
+            hint = "打印配置唯一名称（打印机/驱动/纸张/方向/缩放）"
+            setSingleLine(true)
+            setText(getSharedPreferences("brow_transfer_validation", Context.MODE_PRIVATE)
+                .getString("last_printer_profile", ""))
+        }
+        val region = android.widget.Spinner(this).apply {
+            adapter = android.widget.ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                curvatureRegionNames
+            )
+        }
+        val surfaceArc = EditText(this).apply {
+            hint = "同一端点间的皮肤表面弧长（毫米）"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        val templatePath = EditText(this).apply {
+            hint = "打印模板上相同端点间的轮廓路径长度（毫米）"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        val endpointError = EditText(this).apply {
+            hint = "实际转印端点最大偏差（毫米，可留空）"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        val calibrationBox = EditText(this).apply {
+            hint = "打印后 20 mm 校准框的实测边长（毫米）"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        }
+        val correctionMethod = android.widget.Spinner(this).apply {
+            adapter = android.widget.ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                listOf(
+                    "无补偿",
+                    "八区实测弧长/弦长系数",
+                    "MediaPipe 相对深度估计（实验性）",
+                    "其他"
+                )
+            )
+        }
+        val instructions = TextView(this).apply {
+            text = "只在获授权的可逆测试流程中记录。每条记录须使用同一对解剖端点。打印配置名必须固定对应打印机、驱动、纸张、方向和缩放设置。先量 20 mm 校准框，再评估转印误差。这里仅记录测量，不会自动启用曲率补偿。"
+            textSize = 12f
+            setPadding(0, dp(4), 0, dp(6))
+        }
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(8), dp(18), 0)
+            addView(instructions)
+            addView(TextView(this@MainActivity).apply {
+                text = "匿名案例：$currentCaseId"
+                textSize = 12f
+            })
+            addView(profileField)
+            addView(region)
+            addView(surfaceArc)
+            addView(templatePath)
+            addView(endpointError)
+            addView(calibrationBox)
+            addView(correctionMethod)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("实体转印误差记录")
+            .setView(form)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("保存测量") { _, _ ->
+                val profile = profileField.text.toString().trim()
+                val arcMm = surfaceArc.text.toString().toFloatOrNull()
+                val templateMm = templatePath.text.toString().toFloatOrNull()
+                val endpointText = endpointError.text.toString().trim()
+                val endpointMm = if (endpointText.isEmpty()) null else endpointText.toString().toFloatOrNull()
+                val boxMm = calibrationBox.text.toString().toFloatOrNull()
+                if (profile.length < 3 || arcMm == null || templateMm == null || boxMm == null ||
+                    !arcMm.isFinite() || !templateMm.isFinite() || !boxMm.isFinite() ||
+                    arcMm <= 0f || templateMm <= 0f || boxMm !in 16f..24f ||
+                    (endpointText.isNotEmpty() && (endpointMm == null || !endpointMm.isFinite() || endpointMm < 0f))) {
+                    Toast.makeText(
+                        this,
+                        "请填写固定的打印配置、正的弧长/模板路径长度和 16–24 mm 的校准框实测值；端点偏差只能为非负数或留空",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return@setPositiveButton
+                }
+                val signedError = templateMm - arcMm
+                val prefs = getSharedPreferences("brow_transfer_validation", Context.MODE_PRIVATE)
+                val records = org.json.JSONArray(prefs.getString("records", "[]"))
+                val record = org.json.JSONObject().apply {
+                    put("case_id", currentCaseId.trim())
+                    put("printer_profile", profile)
+                    put("region", region.selectedItem.toString())
+                    put("surface_arc_mm", arcMm.toDouble())
+                    put("template_path_mm", templateMm.toDouble())
+                    put("signed_length_error_mm", signedError.toDouble())
+                    put("absolute_length_error_mm", kotlin.math.abs(signedError).toDouble())
+                    put("relative_length_error_pct", (signedError / arcMm * 100f).toDouble())
+                    put("endpoint_error_mm", endpointMm?.toDouble() ?: org.json.JSONObject.NULL)
+                    put("calibration_box_mm", boxMm.toDouble())
+                    put("correction_method", correctionMethod.selectedItem.toString())
+                    put("timestamp", System.currentTimeMillis())
+                }
+                records.put(record)
+                prefs.edit()
+                    .putString("records", records.toString())
+                    .putString("last_printer_profile", profile)
+                    .apply()
+                Toast.makeText(
+                    this,
+                    "转印测量已保存。待积累独立顾客数据后运行 ml/analyze_stencil_transfer.py；本记录不代表验收通过。",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            .show()
+    }
+
+    private fun exportTransferValidationCsv() {
+        val records = org.json.JSONArray(
+            getSharedPreferences("brow_transfer_validation", Context.MODE_PRIVATE)
+                .getString("records", "[]")
+        )
+        if (records.length() == 0) {
+            Toast.makeText(this, "暂时没有转印误差记录", Toast.LENGTH_SHORT).show()
+            return
+        }
+        fun csvCell(value: String): String = "\"" + value.replace("\"", "\"\"") + "\""
+        val csv = buildString {
+            append("case_id,printer_profile,region,surface_arc_mm,template_path_mm,signed_length_error_mm,absolute_length_error_mm,relative_length_error_pct,endpoint_error_mm,calibration_box_mm,correction_method,timestamp\n")
+            for (i in 0 until records.length()) {
+                val row = records.optJSONObject(i) ?: continue
+                val endpoint = row.opt("endpoint_error_mm")
+                append(csvCell(row.optString("case_id"))).append(',')
+                append(csvCell(row.optString("printer_profile"))).append(',')
+                append(csvCell(row.optString("region"))).append(',')
+                append(row.optDouble("surface_arc_mm")).append(',')
+                append(row.optDouble("template_path_mm")).append(',')
+                append(row.optDouble("signed_length_error_mm")).append(',')
+                append(row.optDouble("absolute_length_error_mm")).append(',')
+                append(row.optDouble("relative_length_error_pct")).append(',')
+                append(if (endpoint == null || endpoint == org.json.JSONObject.NULL) "" else endpoint.toString()).append(',')
+                append(row.optDouble("calibration_box_mm")).append(',')
+                append(csvCell(row.optString("correction_method"))).append(',')
+                append(row.optLong("timestamp")).append('\n')
+            }
+        }
+        val filename = "brow_transfer_validation_${System.currentTimeMillis()}.csv"
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, filename)
+                    put(MediaStore.Downloads.MIME_TYPE, "text/csv")
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: throw IllegalStateException("无法创建下载文件")
+                contentResolver.openOutputStream(uri)?.use { it.write(csv.toByteArray(Charsets.UTF_8)) }
+                    ?: throw IllegalStateException("无法写入下载文件")
+                val published = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+                contentResolver.update(uri, published, null, null)
+                Toast.makeText(this, "转印误差数据已导出到 Downloads/BrowDesign", Toast.LENGTH_LONG).show()
+            } else {
+                val directory = File(getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "BrowDesign")
+                if (!directory.exists()) directory.mkdirs()
+                val file = File(directory, filename)
+                file.writeText(csv, Charsets.UTF_8)
+                Toast.makeText(this, "转印误差数据已导出：" + file.absolutePath, Toast.LENGTH_LONG).show()
+            }
+        } catch (e: Exception) {
+            Toast.makeText(this, "导出失败：" + (e.message ?: "请重试"), Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun clearLocalRecords() {
+        AlertDialog.Builder(this)
+            .setTitle("清除应用内记录")
+            .setMessage("将删除本机保存的匿名偏好反馈、曲率测量和转印误差记录。已导出的 CSV 文件和已保存到相册的设计图不会自动删除，需要到下载目录或相册中单独清除。此操作无法撤销。")
         val records = org.json.JSONArray(
             getSharedPreferences("brow_curvature_samples", Context.MODE_PRIVATE).getString("records", "[]")
         )
@@ -1912,11 +2096,18 @@ class MainActivity : AppCompatActivity() {
             if (region !in curvatureRegionNames || !factor.isFinite() || factor !in 1.0f..1.5708f) continue
             valuesByRegion.getOrPut(region) { mutableListOf() }.add(factor)
         }
-        return valuesByRegion.mapValues { (_, factors) ->
-            val sorted = factors.sorted()
-            if (sorted.size % 2 == 1) sorted[sorted.size / 2]
-            else (sorted[sorted.size / 2 - 1] + sorted[sorted.size / 2]) / 2f
-        }
+        // Require at least three repeated measurements per region for a current-case
+        // correction. A single entered length is too sensitive to endpoint placement error.
+        return valuesByRegion.mapNotNull { (region, factors) ->
+            if (factors.size < 3) {
+                null
+            } else {
+                val sorted = factors.sorted()
+                val median = if (sorted.size % 2 == 1) sorted[sorted.size / 2]
+                else (sorted[sorted.size / 2 - 1] + sorted[sorted.size / 2]) / 2f
+                region to median
+            }
+        }.toMap()
     }
 
     /**
@@ -1980,7 +2171,7 @@ class MainActivity : AppCompatActivity() {
             setText("")
         }
         val calibrationInfo = TextView(this).apply {
-            text = "已记录当前顾客的曲率区域：${measuredFactors.size}/8。必须使用柔性尺测表面弧长，并测量同一段两端距离。"
+            text = "当前顾客已完成至少 3 次重复实测的眉区：${measuredFactors.size}/8。每个区域须使用柔性尺测表面弧长，并测量同一段两端距离。"
             textSize = 12f
             setPadding(dp(4), dp(6), dp(4), dp(6))
         }
