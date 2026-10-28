@@ -29,6 +29,8 @@ Use this list to distinguish code completion, automated tests, device testing an
 - [ ] Compute summaries after averaging repeats within each anonymous customer. Report the case-level P10–P90 empirical range separately from the bootstrap confidence interval of the mean.
 - [ ] Reserve customers for independent coverage validation. Evaluate whether regional prediction ranges cover actual surface-length discrepancy at the stated rate.
 - [ ] Compare the design, corrected template, printed stencil and actual transfer on skin by region and side.
+- [ ] Record printer profile, the measured 20 mm calibration square, surface arc length, template path length, correction mode and optional endpoint error in the app's transfer-validation log.
+- [ ] Set maximum length, endpoint and scale-error thresholds before inspecting the validation results. Run `ml/analyze_stencil_transfer.py` and report customer-level summaries by printer profile, region and correction method.
 - [ ] No fixed correction interval should be activated by default until independent measurement and transfer accuracy is demonstrated.
 
 ## D. Android and printer
@@ -48,4 +50,4 @@ Use this list to distinguish code completion, automated tests, device testing an
 
 ## Status before in-person validation
 
-The repository has on-device design/edit/plan workflows, model-assisted brow segmentation with manual correction, anonymous feedback export, a ranking-model training path, curvature-measurement export and grouped analysis, and print-scale correction. It does not contain real customer-trained ranking or segmentation weights. Device/printer behavior, actual stencil transfer accuracy and 3D curvature correction remain empirical acceptance items that code alone cannot establish.
+The repository has on-device design/edit/plan workflows, model-assisted brow segmentation with manual correction, anonymous feedback export, a gated ranking-model training path, curvature-measurement export and grouped analysis, physical transfer-validation logging and an error-analysis script, and print-scale correction. It does not contain real customer-trained ranking or segmentation weights. Device/printer behavior, actual stencil transfer accuracy and 3D curvature correction remain empirical acceptance items that code alone cannot establish.
