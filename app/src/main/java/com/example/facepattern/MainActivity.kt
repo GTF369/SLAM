@@ -717,8 +717,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun decodeImportedPhoto(uri: Uri): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-            ?: return null
+        val boundsStream = contentResolver.openInputStream(uri) ?: return null
+        boundsStream.use { BitmapFactory.decodeStream(it, null, bounds) }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
         val sample = calculateSampleSize(bounds.outWidth, bounds.outHeight, 3000)
         val options = BitmapFactory.Options().apply {
