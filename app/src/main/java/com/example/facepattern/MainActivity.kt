@@ -56,8 +56,6 @@ import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
-import androidx.camera.core.resolutionselector.ResolutionSelector
-import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -484,13 +482,12 @@ class MainActivity : AppCompatActivity() {
                     val provider = providerFuture.get()
                     cameraProvider = provider
                     val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
+                    // Let CameraX choose a supported capture size for this device's
+                    // front camera and the active preview/analysis use cases. Forcing the
+                    // sensor's highest still resolution can make the three-use-case bind fail
+                    // on some OEM camera implementations.
                     val stillCapture = ImageCapture.Builder()
                         .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                        .setResolutionSelector(
-                            ResolutionSelector.Builder()
-                                .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
-                                .build()
-                        )
                         .setTargetRotation(previewView.display?.rotation ?: android.view.Surface.ROTATION_0)
                         .build()
                     imageCapture = stillCapture
