@@ -775,6 +775,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun captureForDesign() {
         if (captureInProgress) return
+        try {
         val anonymousCode = EditText(this).apply {
             hint = "匿名顾客代码，同一顾客重复到店请沿用"
             setSingleLine(true)
@@ -816,7 +817,10 @@ class MainActivity : AppCompatActivity() {
                 currentCaseId = safeCode
                 captureHighResolutionPhoto()
             }
-            .show()
+            .show()        } catch (e: Exception) {
+            status.text = "无法打开拍照流程：" + (e.message ?: e.javaClass.simpleName)
+            Toast.makeText(this, status.text, Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun captureHighResolutionPhoto() {
