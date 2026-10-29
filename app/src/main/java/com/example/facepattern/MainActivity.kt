@@ -19,6 +19,7 @@ import android.graphics.Path
 import android.graphics.PointF
 import android.graphics.RectF
 import android.graphics.Shader
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -47,6 +48,7 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -54,8 +56,6 @@ import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
-import androidx.camera.core.resolutionselector.ResolutionSelector
-import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -126,6 +126,9 @@ class MainActivity : AppCompatActivity() {
     private var currentCaseId: String = UUID.randomUUID().toString().take(8)
     private val lastTimestamp = AtomicLong(0L)
     private val cameraPermission = 701
+    private val importPhotoLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        if (uri != null) importPhotoForDesign(uri)
+    }
     private var frameWidth = 640
     private var frameHeight = 480
     private var designMode = false
@@ -195,6 +198,7 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             addButtonRow(this, listOf(
                 "拍照设计" to { captureForDesign() },
+                "导入照片" to { confirmImportPhoto() },
                 "重置" to { browView.setParams(BrowParams()); params = BrowParams() }
             ))
         }
@@ -478,13 +482,12 @@ class MainActivity : AppCompatActivity() {
                     val provider = providerFuture.get()
                     cameraProvider = provider
                     val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
+                    // Let CameraX choose a supported capture size for this device's
+                    // front camera and the active preview/analysis use cases. Forcing the
+                    // sensor's highest still resolution can make the three-use-case bind fail
+                    // on some OEM camera implementations.
                     val stillCapture = ImageCapture.Builder()
                         .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                        .setResolutionSelector(
-                            ResolutionSelector.Builder()
-                                .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
-                                .build()
-                        )
                         .setTargetRotation(previewView.display?.rotation ?: android.view.Surface.ROTATION_0)
                         .build()
                     imageCapture = stillCapture
@@ -579,6 +582,187 @@ class MainActivity : AppCompatActivity() {
         return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
     }
 
+
+    private fun confirmImportPhoto() {
+        if (captureInProgress) return
+        val anonymousCode = EditText(this).apply {
+            hint = "匿名顾客代码，同一顾客重复到店请沿用"
+            setSingleLine(true)
+            setText(currentCaseId)
+        }
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(4), dp(20), dp(4))
+            addView(TextView(this@MainActivity).apply {
+                text = "请先取得顾客同意。选择的照片只在本机处理，不会由本功能上传。建议使用正面、清晰、眉眼无遮挡的照片。"
+                textSize = 13f
+                setPadding(0, 0, 0, dp(8))
+            })
+            addView(anonymousCode)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("导入顾客照片")
+            .setView(form)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("选择照片") { _, _ ->
+                val safeCode = anonymousCode.text.toString().trim()
+                    .filter { it.isLetterOrDigit() || it == '_' || it == '-' }
+                    .take(32)
+                if (safeCode.isBlank()) {
+                    Toast.makeText(this, "请输入匿名代码", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                currentCaseId = safeCode
+                importPhotoLauncher.launch("image/*")
+            }
+            .show()
+    }
+
+    private fun importPhotoForDesign(uri: Uri) {
+        if (captureInProgress) return
+        captureInProgress = true
+        status.text = "正在读取照片并识别人脸关键点…"
+        if (imageExecutor == null || imageExecutor?.isShutdown != false) {
+            imageExecutor = Executors.newSingleThreadExecutor()
+        }
+        val executor = imageExecutor
+        if (executor == null) {
+            captureInProgress = false
+            status.text = "照片处理线程不可用，请重试"
+            Toast.makeText(this, status.text, Toast.LENGTH_LONG).show()
+            return
+        }
+        try {
+            executor.execute {
+                var photo: Bitmap? = null
+                var points: List<PointF> = emptyList()
+                var depths: List<Float> = emptyList()
+                var failure: String? = null
+                var detector: FaceLandmarker? = null
+                var mpImage: com.google.mediapipe.framework.image.MPImage? = null
+                try {
+                    photo = decodeImportedPhoto(uri)
+                    if (photo == null) {
+                        failure = "无法读取该照片，请尝试 JPG 或 PNG 格式"
+                    } else {
+                        detector = FaceLandmarker.createFromOptions(
+                            this@MainActivity,
+                            FaceLandmarker.FaceLandmarkerOptions.builder()
+                                .setBaseOptions(BaseOptions.builder().setModelAssetPath("face_landmarker.task").build())
+                                .setRunningMode(RunningMode.IMAGE)
+                                .setNumFaces(1)
+                                .build()
+                        )
+                        mpImage = BitmapImageBuilder(photo).build()
+                        val result = detector.detect(mpImage)
+                        val detected = result.faceLandmarks().firstOrNull()
+                        points = detected?.map {
+                            PointF(it.x() * photo!!.width, it.y() * photo!!.height)
+                        } ?: emptyList()
+                        depths = detected?.map { it.z() } ?: emptyList()
+                        if (points.size < 400) {
+                            failure = "照片中未能稳定识别人脸。请使用正面、清晰、眉眼无遮挡的照片"
+                        }
+                    }
+                } catch (e: Exception) {
+                    failure = "导入照片分析失败：" + (e.message ?: e.javaClass.simpleName)
+                } finally {
+                    try { mpImage?.close() } catch (_: Exception) {}
+                    try { detector?.close() } catch (_: Exception) {}
+                }
+                runOnUiThread {
+                    captureInProgress = false
+                    if (isFinishing || isDestroyed) {
+                        photo?.recycle()
+                        return@runOnUiThread
+                    }
+                    if (failure != null || photo == null) {
+                        photo?.recycle()
+                        status.text = failure ?: "无法读取照片，请重试"
+                        Toast.makeText(this@MainActivity, status.text, Toast.LENGTH_LONG).show()
+                    } else {
+                        val warning = photoQualityWarning(photo!!, points)
+                        if (warning == null) {
+                            enterDesignMode(photo!!, points, depths)
+                        } else {
+                            AlertDialog.Builder(this@MainActivity)
+                                .setTitle("照片质量提醒")
+                                .setMessage(warning + "\n\n仍可继续使用，但眉形定位和打印拓描可能存在误差。")
+                                .setNegativeButton("重新选择") { _, _ -> photo!!.recycle() }
+                                .setPositiveButton("仍然使用") { _, _ -> enterDesignMode(photo!!, points, depths) }
+                                .setOnCancelListener { if (photo?.isRecycled == false) photo?.recycle() }
+                                .show()
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            captureInProgress = false
+            status.text = "无法启动照片处理：" + (e.message ?: e.javaClass.simpleName)
+            Toast.makeText(this, status.text, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun calculateSampleSize(width: Int, height: Int, maxDimension: Int = 3000): Int {
+        if (width <= 0 || height <= 0) return 1
+        var sample = 1
+        while (max(width, height) / sample > maxDimension) {
+            sample *= 2
+        }
+        return sample
+    }
+
+    private fun decodeImportedPhoto(uri: Uri): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        val boundsStream = contentResolver.openInputStream(uri) ?: return null
+        boundsStream.use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        val sample = calculateSampleSize(bounds.outWidth, bounds.outHeight, 3000)
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sample
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        val decoded = contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, options)
+        } ?: return null
+        val orientation = try {
+            contentResolver.openInputStream(uri)?.use {
+                ExifInterface(it).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL
+                )
+            } ?: ExifInterface.ORIENTATION_NORMAL
+        } catch (_: Exception) {
+            ExifInterface.ORIENTATION_NORMAL
+        }
+        return applyExifOrientation(decoded, orientation)
+    }
+
+    private fun applyExifOrientation(decoded: Bitmap, orientation: Int): Bitmap {
+        if (orientation == ExifInterface.ORIENTATION_NORMAL ||
+            orientation == ExifInterface.ORIENTATION_UNDEFINED) return decoded
+        val transform = Matrix()
+        when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> transform.postRotate(90f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> transform.postRotate(180f)
+            ExifInterface.ORIENTATION_ROTATE_270 -> transform.postRotate(270f)
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> transform.postScale(-1f, 1f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> transform.postScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> {
+                transform.postRotate(90f)
+                transform.postScale(-1f, 1f)
+            }
+            ExifInterface.ORIENTATION_TRANSVERSE -> {
+                transform.postRotate(270f)
+                transform.postScale(-1f, 1f)
+            }
+            else -> return decoded
+        }
+        return Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, transform, true).also {
+            if (it !== decoded) decoded.recycle()
+        }
+    }
+
     private fun captureForDesign() {
         if (captureInProgress) return
         val anonymousCode = EditText(this).apply {
@@ -627,11 +811,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun captureHighResolutionPhoto() {
         if (captureInProgress) return
-        val livePoints = browView.facePoints()
-        if (livePoints.size < 400) {
-            Toast.makeText(this, "尚未稳定识别人脸，请正视镜头后再拍照", Toast.LENGTH_SHORT).show()
-            return
-        }
+        // Do not block capture based on preview tracking alone. The saved full-resolution
+        // photo is independently checked with IMAGE-mode landmarks below, which is more
+        // reliable on devices where live preview frames are intermittently dropped.
         val stillCapture = imageCapture
         if (stillCapture == null) {
             Toast.makeText(this, "相机尚未准备好，请稍后重试", Toast.LENGTH_SHORT).show()
@@ -727,33 +909,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun decodeCapturedPhoto(file: File): Bitmap? {
-        val decoded = BitmapFactory.decodeFile(file.absolutePath) ?: return null
-        val exif = try { ExifInterface(file.absolutePath) } catch (_: Exception) { null }
-        val orientation = exif?.getAttributeInt(
-            ExifInterface.TAG_ORIENTATION,
+        // Some front cameras save very large JPEGs. Downsample before EXIF rotation and
+        // mirroring to avoid allocating several full-resolution bitmaps on mobile devices.
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = calculateSampleSize(bounds.outWidth, bounds.outHeight, 3000)
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        val decoded = BitmapFactory.decodeFile(file.absolutePath, options) ?: return null
+        val orientation = try {
+            ExifInterface(file.absolutePath).getAttributeInt(
+                ExifInterface.TAG_ORIENTATION,
+                ExifInterface.ORIENTATION_NORMAL
+            )
+        } catch (_: Exception) {
             ExifInterface.ORIENTATION_NORMAL
-        ) ?: ExifInterface.ORIENTATION_NORMAL
-        val transform = Matrix()
-        when (orientation) {
-            ExifInterface.ORIENTATION_ROTATE_90 -> transform.postRotate(90f)
-            ExifInterface.ORIENTATION_ROTATE_180 -> transform.postRotate(180f)
-            ExifInterface.ORIENTATION_ROTATE_270 -> transform.postRotate(270f)
-            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> transform.postScale(-1f, 1f)
-            ExifInterface.ORIENTATION_FLIP_VERTICAL -> transform.postScale(1f, -1f)
-            ExifInterface.ORIENTATION_TRANSPOSE -> {
-                transform.postRotate(90f)
-                transform.postScale(-1f, 1f)
-            }
-            ExifInterface.ORIENTATION_TRANSVERSE -> {
-                transform.postRotate(270f)
-                transform.postScale(-1f, 1f)
-            }
         }
-        val oriented = if (orientation == ExifInterface.ORIENTATION_NORMAL) decoded else {
-            Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, transform, true).also {
-                if (it !== decoded) decoded.recycle()
-            }
-        }
+        val oriented = applyExifOrientation(decoded, orientation)
         // Match the front-camera mirror shown to the customer and the design overlay.
         val mirror = Matrix().apply { postScale(-1f, 1f, oriented.width / 2f, oriented.height / 2f) }
         return Bitmap.createBitmap(oriented, 0, 0, oriented.width, oriented.height, mirror, true).also {
