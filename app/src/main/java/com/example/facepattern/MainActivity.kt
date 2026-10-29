@@ -817,7 +817,8 @@ class MainActivity : AppCompatActivity() {
                 currentCaseId = safeCode
                 captureHighResolutionPhoto()
             }
-            .show()        } catch (e: Exception) {
+            .show()
+        } catch (e: Exception) {
             status.text = "无法打开拍照流程：" + (e.message ?: e.javaClass.simpleName)
             Toast.makeText(this, status.text, Toast.LENGTH_LONG).show()
         }
@@ -1851,8 +1852,12 @@ class MainActivity : AppCompatActivity() {
         browView.setNativeShapeMode(false)
         segmentationLabel.text = "正在识别原生眉区…"
         imageExecutor?.execute {
+            var segmentationOutOfMemory = false
             val result = try {
                 BrowSegmentationEngine.segment(this, photo, points, segmentationSensitivity)
+            } catch (_: OutOfMemoryError) {
+                segmentationOutOfMemory = true
+                null
             } catch (_: Exception) {
                 null
             }
@@ -1864,7 +1869,11 @@ class MainActivity : AppCompatActivity() {
                 segmentationResult?.overlay?.recycle()
                 segmentationResult = result
                 if (result == null) {
-                    segmentationLabel.text = "识别失败，请调整光线或重新拍摄"
+                    segmentationLabel.text = if (segmentationOutOfMemory) {
+                        "眉区识别内存不足。已保留参数化初稿，请关闭其他应用后重试"
+                    } else {
+                        "识别失败，请调整光线或重新拍摄"
+                    }
                     browView.setSegmentationResult(null, false)
                     showNativeSegmentation = false
                 } else {
