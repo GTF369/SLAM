@@ -125,6 +125,7 @@ class MainActivity : AppCompatActivity() {
     private var captureInProgress = false
     private var currentCaseId: String = UUID.randomUUID().toString().take(8)
     private val lastTimestamp = AtomicLong(0L)
+    private val lastPreviewAnalysisMs = AtomicLong(0L)
     private val cameraPermission = 701
     private val importPhotoLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null) importPhotoForDesign(uri)
@@ -497,6 +498,11 @@ class MainActivity : AppCompatActivity() {
                         .build()
                     analysis.setAnalyzer(cameraExecutor!!) { image ->
                         try {
+                            // Analyze at a bounded rate to reduce CPU and native-memory pressure.
+                            val analysisNow = System.nanoTime() / 1_000_000L
+                            val lastAnalysis = lastPreviewAnalysisMs.get()
+                            if (analysisNow - lastAnalysis < 100L) return@setAnalyzer
+                            lastPreviewAnalysisMs.set(analysisNow)
                             val bitmap = imageToBitmap(image)
                             val rotated = if (image.imageInfo.rotationDegrees != 0) {
                                 val matrix = Matrix().apply { postRotate(image.imageInfo.rotationDegrees.toFloat()) }
@@ -531,6 +537,10 @@ class MainActivity : AppCompatActivity() {
                             } finally {
                                 if (!rotated.isRecycled) rotated.recycle()
                             }
+                        } catch (e: OutOfMemoryError) {
+                            runOnUiThread {
+                                status.text = "实时识别内存不足，请关闭其他应用后重试拍摄"
+                            }
                         } catch (_: Exception) {
                             // Skip a broken camera frame. The next frame will be analyzed.
                         } finally {
@@ -541,7 +551,7 @@ class MainActivity : AppCompatActivity() {
                     provider.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, preview, analysis, stillCapture)
                     status.text = "摄像头已启动，请将脸放在画面中央"
                 } catch (e: Exception) {
-                    status.text = "摄像头启动失败，请检查权限后重试"
+                    status.text = "摄像头启动失败：" + (e.message ?: "请检查权限后重试")
                 }
             }, ContextCompat.getMainExecutor(this))
         } catch (e: Exception) {
@@ -703,7 +713,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun calculateSampleSize(width: Int, height: Int, maxDimension: Int = 3000): Int {
+    private fun calculateSampleSize(width: Int, height: Int, maxDimension: Int = 2200): Int {
         if (width <= 0 || height <= 0) return 1
         var sample = 1
         while (max(width, height) / sample > maxDimension) {
@@ -717,7 +727,7 @@ class MainActivity : AppCompatActivity() {
         val boundsStream = contentResolver.openInputStream(uri) ?: return null
         boundsStream.use { BitmapFactory.decodeStream(it, null, bounds) }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-        val sample = calculateSampleSize(bounds.outWidth, bounds.outHeight, 3000)
+        val sample = calculateSampleSize(bounds.outWidth, bounds.outHeight, 2200)
         val options = BitmapFactory.Options().apply {
             inSampleSize = sample
             inPreferredConfig = Bitmap.Config.ARGB_8888
@@ -823,8 +833,9 @@ class MainActivity : AppCompatActivity() {
         status.text = "正在拍摄高分辨率照片并校验人脸关键点…"
         val file = File(cacheDir, "brow_capture_${System.currentTimeMillis()}.jpg")
         val output = ImageCapture.OutputFileOptions.Builder(file).build()
-        stillCapture.takePicture(
-            output,
+        try {
+            stillCapture.takePicture(
+                output,
             ContextCompat.getMainExecutor(this),
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
@@ -860,6 +871,10 @@ class MainActivity : AppCompatActivity() {
                                 depths = detected?.map { it.z() } ?: emptyList()
                                 if (points.size < 400) failure = "照片中的人脸关键点不足，请正视镜头并保持眉眼无遮挡"
                             }
+                        } catch (e: OutOfMemoryError) {
+                            try { bitmap?.recycle() } catch (_: Exception) {}
+                            bitmap = null
+                            failure = "照片处理时内存不足。已降低处理分辨率，请关闭其他应用后重试"
                         } catch (e: Exception) {
                             failure = "照片分析失败：" + (e.message ?: "请调整姿势后重试")
                         } finally {
@@ -905,7 +920,18 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this@MainActivity, status.text, Toast.LENGTH_LONG).show()
                 }
             }
-        )
+            )
+        } catch (e: OutOfMemoryError) {
+            captureInProgress = false
+            file.delete()
+            status.text = "拍照启动时内存不足，请关闭其他应用后重试"
+            Toast.makeText(this, status.text, Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            captureInProgress = false
+            file.delete()
+            status.text = "无法启动拍照：" + (e.message ?: e.javaClass.simpleName)
+            Toast.makeText(this, status.text, Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun decodeCapturedPhoto(file: File): Bitmap? {
@@ -915,7 +941,7 @@ class MainActivity : AppCompatActivity() {
         BitmapFactory.decodeFile(file.absolutePath, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
         val options = BitmapFactory.Options().apply {
-            inSampleSize = calculateSampleSize(bounds.outWidth, bounds.outHeight, 3000)
+            inSampleSize = calculateSampleSize(bounds.outWidth, bounds.outHeight, 2200)
             inPreferredConfig = Bitmap.Config.ARGB_8888
         }
         val decoded = BitmapFactory.decodeFile(file.absolutePath, options) ?: return null
