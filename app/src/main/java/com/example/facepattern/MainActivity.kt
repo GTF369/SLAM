@@ -859,6 +859,7 @@ class MainActivity : AppCompatActivity() {
             imageAnalysis?.clearAnalyzer()
             imageAnalysis = null
             previewExecutor?.shutdown()
+            cameraExecutor = null
 
             stillCapture.takePicture(
                 output,
