@@ -70,6 +70,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import java.util.UUID
 import kotlin.math.abs
@@ -121,6 +122,7 @@ class MainActivity : AppCompatActivity() {
     private var cameraExecutor: ExecutorService? = null
     private var cameraProvider: ProcessCameraProvider? = null
     private var imageCapture: ImageCapture? = null
+    private var imageAnalysis: ImageAnalysis? = null
     private var imageExecutor: ExecutorService? = null
     private var captureInProgress = false
     private var currentCaseId: String = UUID.randomUUID().toString().take(8)
@@ -465,6 +467,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun startFaceTracking() {
         try {
+            imageAnalysis?.clearAnalyzer()
+            imageAnalysis = null
             landmarker?.close()
             landmarker = FaceLandmarker.createFromOptions(
                 this,
@@ -496,6 +500,7 @@ class MainActivity : AppCompatActivity() {
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                         .build()
+                    imageAnalysis = analysis
                     analysis.setAnalyzer(cameraExecutor!!) { image ->
                         try {
                             // Analyze at a bounded rate to reduce CPU and native-memory pressure.
@@ -826,116 +831,214 @@ class MainActivity : AppCompatActivity() {
 
     private fun captureHighResolutionPhoto() {
         if (captureInProgress) return
-        // Do not block capture based on preview tracking alone. The saved full-resolution
-        // photo is independently checked with IMAGE-mode landmarks below, which is more
-        // reliable on devices where live preview frames are intermittently dropped.
         val stillCapture = imageCapture
         if (stillCapture == null) {
             Toast.makeText(this, "相机尚未准备好，请稍后重试", Toast.LENGTH_SHORT).show()
             return
         }
+        if (imageExecutor == null || imageExecutor?.isShutdown != false) {
+            imageExecutor = Executors.newSingleThreadExecutor()
+        }
+        val processingExecutor = imageExecutor
+        if (processingExecutor == null) {
+            Toast.makeText(this, "照片处理线程不可用，请重试", Toast.LENGTH_LONG).show()
+            return
+        }
+
         captureInProgress = true
-        status.text = "正在拍摄高分辨率照片并校验人脸关键点…"
+        status.text = "正在拍照，请保持正面姿势…"
         val file = File(cacheDir, "brow_capture_${System.currentTimeMillis()}.jpg")
         val output = ImageCapture.OutputFileOptions.Builder(file).build()
+
+        // Stop live frame inference before running the still-photo detector. The VIDEO
+        // landmarker and IMAGE landmarker each hold native model resources. Keeping both
+        // active while decoding a large camera image can cause process-level OOM/native
+        // crashes on some devices.
+        val previewExecutor = cameraExecutor
         try {
+            imageAnalysis?.clearAnalyzer()
+            imageAnalysis = null
+            previewExecutor?.shutdown()
+
             stillCapture.takePicture(
                 output,
-            ContextCompat.getMainExecutor(this),
-            object : ImageCapture.OnImageSavedCallback {
-                override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                    if (imageExecutor == null || imageExecutor?.isShutdown != false) {
-                        imageExecutor = Executors.newSingleThreadExecutor()
-                    }
-                    imageExecutor?.execute {
-                        var bitmap: Bitmap? = null
-                        var points: List<PointF> = emptyList()
-                        var depths: List<Float> = emptyList()
-                        var failure: String? = null
-                        var detector: FaceLandmarker? = null
-                        var mpImage: com.google.mediapipe.framework.image.MPImage? = null
+                ContextCompat.getMainExecutor(this),
+                object : ImageCapture.OnImageSavedCallback {
+                    override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
                         try {
-                            bitmap = decodeCapturedPhoto(file)
-                            if (bitmap == null) {
-                                failure = "无法读取拍摄照片"
-                            } else {
-                                detector = FaceLandmarker.createFromOptions(
-                                    this@MainActivity,
-                                    FaceLandmarker.FaceLandmarkerOptions.builder()
-                                        .setBaseOptions(BaseOptions.builder().setModelAssetPath("face_landmarker.task").build())
-                                        .setRunningMode(RunningMode.IMAGE)
-                                        .setNumFaces(1)
-                                        .build()
-                                )
-                                mpImage = BitmapImageBuilder(bitmap).build()
-                                val result = detector.detect(mpImage)
-                                val detected = result.faceLandmarks().firstOrNull()
-                                points = detected?.map {
-                                    PointF(it.x() * bitmap!!.width, it.y() * bitmap!!.height)
-                                } ?: emptyList()
-                                depths = detected?.map { it.z() } ?: emptyList()
-                                if (points.size < 400) failure = "照片中的人脸关键点不足，请正视镜头并保持眉眼无遮挡"
-                            }
-                        } catch (e: OutOfMemoryError) {
-                            try { bitmap?.recycle() } catch (_: Exception) {}
-                            bitmap = null
-                            failure = "照片处理时内存不足。已降低处理分辨率，请关闭其他应用后重试"
-                        } catch (e: Exception) {
-                            failure = "照片分析失败：" + (e.message ?: "请调整姿势后重试")
-                        } finally {
-                            try { mpImage?.close() } catch (_: Exception) {}
-                            try { detector?.close() } catch (_: Exception) {}
-                            file.delete()
-                        }
-                        runOnUiThread {
-                            captureInProgress = false
-                            val photo = bitmap
-                            if (failure != null || photo == null) {
-                                photo?.recycle()
-                                status.text = failure ?: "拍摄失败，请重试"
-                                Toast.makeText(this@MainActivity, status.text, Toast.LENGTH_LONG).show()
-                            } else {
-                                val warning = photoQualityWarning(photo, points)
-                                if (warning == null) {
-                                    enterDesignMode(photo, points, depths)
-                                } else {
-                                    AlertDialog.Builder(this@MainActivity)
-                                        .setTitle("拍摄质量提醒")
-                                        .setMessage(warning + "\n\n继续使用可能增加眉形定位和打印拓描误差。")
-                                        .setNegativeButton("重新拍摄") { _, _ ->
-                                            photo.recycle()
-                                            retakePhoto()
+                            processingExecutor.execute {
+                                var bitmap: Bitmap? = null
+                                var points: List<PointF> = emptyList()
+                                var depths: List<Float> = emptyList()
+                                var failure: String? = null
+                                var detector: FaceLandmarker? = null
+                                var mpImage: com.google.mediapipe.framework.image.MPImage? = null
+                                try {
+                                    // Wait for any already-running preview frame to release the
+                                    // VIDEO detector before closing it and creating IMAGE mode.
+                                    val previewStopped = previewExecutor == null ||
+                                        previewExecutor.awaitTermination(10, TimeUnit.SECONDS)
+                                    if (!previewStopped) {
+                                        failure = "实时识别线程未能及时停止。请返回后重试拍照"
+                                    } else {
+                                        try { landmarker?.close() } catch (_: Exception) {}
+                                        landmarker = null
+
+                                        bitmap = decodeCapturedPhoto(file)
+                                        if (bitmap == null) {
+                                            failure = "无法读取拍摄照片"
+                                        } else {
+                                            detector = FaceLandmarker.createFromOptions(
+                                                this@MainActivity,
+                                                FaceLandmarker.FaceLandmarkerOptions.builder()
+                                                    .setBaseOptions(BaseOptions.builder().setModelAssetPath("face_landmarker.task").build())
+                                                    .setRunningMode(RunningMode.IMAGE)
+                                                    .setNumFaces(1)
+                                                    .build()
+                                            )
+                                            mpImage = BitmapImageBuilder(bitmap).build()
+                                            val result = detector.detect(mpImage)
+                                            val detected = result.faceLandmarks().firstOrNull()
+                                            points = detected?.map {
+                                                PointF(it.x() * bitmap!!.width, it.y() * bitmap!!.height)
+                                            } ?: emptyList()
+                                            depths = detected?.map { it.z() } ?: emptyList()
+                                            if (points.size < 400) {
+                                                failure = "照片中的人脸关键点不足，请正视镜头并保持眉眼无遮挡"
+                                            }
                                         }
-                                        .setPositiveButton("仍然使用") { _, _ -> enterDesignMode(photo, points, depths) }
-                                        .show()
+                                    }
+                                } catch (e: OutOfMemoryError) {
+                                    try { bitmap?.recycle() } catch (_: Exception) {}
+                                    bitmap = null
+                                    failure = "拍照分析时内存不足。请关闭其他应用后重试"
+                                } catch (e: Exception) {
+                                    failure = "照片分析失败：" + (e.message ?: e.javaClass.simpleName)
+                                } finally {
+                                    try { mpImage?.close() } catch (_: Exception) {}
+                                    try { detector?.close() } catch (_: Exception) {}
+                                    file.delete()
+                                }
+
+                                runOnUiThread {
+                                    val photo = bitmap
+                                    if (failure != null || photo == null) {
+                                        photo?.recycle()
+                                        recoverCameraAfterCaptureFailure(
+                                            previewExecutor,
+                                            failure ?: "拍照失败，请重试"
+                                        )
+                                    } else {
+                                        try {
+                                            val warning = photoQualityWarning(photo, points)
+                                            if (warning == null) {
+                                                captureInProgress = false
+                                                enterDesignMode(photo, points, depths)
+                                            } else {
+                                                AlertDialog.Builder(this@MainActivity)
+                                                    .setTitle("拍摄质量提醒")
+                                                    .setMessage(warning + "\n\n继续使用可能增加眉形定位和打印拓描误差。")
+                                                    .setNegativeButton("重新拍摄") { _, _ ->
+                                                        photo.recycle()
+                                                        captureInProgress = false
+                                                        retakePhoto()
+                                                    }
+                                                    .setPositiveButton("仍然使用") { _, _ ->
+                                                        captureInProgress = false
+                                                        enterDesignMode(photo, points, depths)
+                                                    }
+                                                    .setOnCancelListener {
+                                                        if (!photo.isRecycled) photo.recycle()
+                                                        captureInProgress = false
+                                                        retakePhoto()
+                                                    }
+                                                    .show()
+                                            }
+                                        } catch (e: OutOfMemoryError) {
+                                            try { photo.recycle() } catch (_: Exception) {}
+                                            recoverCameraAfterCaptureFailure(
+                                                previewExecutor,
+                                                "显示拍摄结果时内存不足，请重试"
+                                            )
+                                        } catch (e: Exception) {
+                                            try { photo.recycle() } catch (_: Exception) {}
+                                            recoverCameraAfterCaptureFailure(
+                                                previewExecutor,
+                                                "打开设计界面失败：" + (e.message ?: e.javaClass.simpleName)
+                                            )
+                                        }
+                                    }
                                 }
                             }
+                        } catch (e: Exception) {
+                            file.delete()
+                            recoverCameraAfterCaptureFailure(
+                                previewExecutor,
+                                "照片处理线程启动失败：" + (e.message ?: e.javaClass.simpleName)
+                            )
                         }
-                    } ?: run {
-                        captureInProgress = false
+                    }
+
+                    override fun onError(exception: ImageCaptureException) {
                         file.delete()
-                        Toast.makeText(this@MainActivity, "照片分析线程不可用，请重试", Toast.LENGTH_LONG).show()
+                        recoverCameraAfterCaptureFailure(
+                            previewExecutor,
+                            "拍照失败：" + (exception.message ?: "请重试")
+                        )
                     }
                 }
-
-                override fun onError(exception: ImageCaptureException) {
-                    captureInProgress = false
-                    file.delete()
-                    status.text = "拍照失败：" + (exception.message ?: "请重试")
-                    Toast.makeText(this@MainActivity, status.text, Toast.LENGTH_LONG).show()
-                }
-            }
             )
         } catch (e: OutOfMemoryError) {
-            captureInProgress = false
             file.delete()
-            status.text = "拍照启动时内存不足，请关闭其他应用后重试"
-            Toast.makeText(this, status.text, Toast.LENGTH_LONG).show()
+            recoverCameraAfterCaptureFailure(
+                previewExecutor,
+                "启动拍照时内存不足，请关闭其他应用后重试"
+            )
+        } catch (e: Exception) {
+            file.delete()
+            recoverCameraAfterCaptureFailure(
+                previewExecutor,
+                "无法启动拍照：" + (e.message ?: e.javaClass.simpleName)
+            )
+        }
+    }
+
+    private fun recoverCameraAfterCaptureFailure(
+        previewExecutor: ExecutorService?,
+        message: String
+    ) {
+        val processingExecutor = imageExecutor
+        if (processingExecutor == null || processingExecutor.isShutdown) {
+            captureInProgress = false
+            status.text = message
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            return
+        }
+        try {
+            processingExecutor.execute {
+                val previewStopped = try {
+                    previewExecutor == null || previewExecutor.awaitTermination(10, TimeUnit.SECONDS)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    false
+                }
+                if (previewStopped) {
+                    try { landmarker?.close() } catch (_: Exception) {}
+                    landmarker = null
+                }
+                runOnUiThread {
+                    captureInProgress = false
+                    status.text = if (previewStopped) message else "${message}。实时识别未能停止，请关闭应用后重新打开"
+                    Toast.makeText(this@MainActivity, status.text, Toast.LENGTH_LONG).show()
+                    if (previewStopped && !isFinishing && !isDestroyed && !designMode) {
+                        startFaceTracking()
+                    }
+                }
+            }
         } catch (e: Exception) {
             captureInProgress = false
-            file.delete()
-            status.text = "无法启动拍照：" + (e.message ?: e.javaClass.simpleName)
-            Toast.makeText(this, status.text, Toast.LENGTH_LONG).show()
+            status.text = message
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         }
     }
 
