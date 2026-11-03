@@ -26,6 +26,11 @@ Use this list to distinguish code completion, automated tests, device testing an
 - [ ] Standardize how each of eight regions is measured, including endpoints, arc path, chord definition, tool, pose, repeated measurements and invalid samples.
 - [ ] Assess within-staff and between-staff measurement repeatability.
 - [ ] Use an independent 3D scan, calibrated multiview reconstruction or reliable physical measurement as reference. Do not treat single-image landmarks or relative MediaPipe z values as millimetres.
+- [ ] For the OPPO Find X7 prototype, check ARCore runtime availability and Depth API support before scan start. The official ARCore device list marks Find X7 as Depth API supported, but this does not establish brow-region measurement accuracy.
+- [ ] Acquire Raw Depth and its confidence image where available. Reject invalid/low-confidence pixels and frames without new depth data. Record camera intrinsics, frame timestamps, image dimensions and camera poses.
+- [ ] Validate scan distance and device motion on a head phantom. ARCore depth is motion-derived and its documented best range is approximately 0.5–5 m. Treat the close-range brow scan as an experiment until its coverage and error are measured.
+- [ ] Keep ARCore scanning in a separate camera lifecycle from the existing CameraX capture flow. Test pause/resume, camera handoff, permission denial and resource release.
+- [ ] Compare the reconstructed brow patch with an independent 3D reference before enabling any automatic print compensation.
 - [ ] Compute summaries after averaging repeats within each anonymous customer. Report the case-level P10–P90 empirical range separately from the bootstrap confidence interval of the mean.
 - [ ] Reserve customers for independent coverage validation. Evaluate whether regional prediction ranges cover actual surface-length discrepancy at the stated rate.
 - [ ] Compare the design, corrected template, printed stencil and actual transfer on skin by region and side.
