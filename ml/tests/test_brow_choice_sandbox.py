@@ -30,7 +30,7 @@ class BrowChoiceSandboxTests(unittest.TestCase):
     def test_choice_trainer_rejects_mixed_intent_within_session(self):
         rows, _ = make_synthetic_rows(1, "MIXED-INTENT", 14)
         rows[1]["design_intent"] = "偏立体"
-        with self.assertRaisesRegex(ValueError, "invalid choice sessions"):
+        with self.assertRaisesRegex(ValueError, "inconsistent design intent"):
             build_choice_sessions(rows, "mixed-intent test")
 
     def test_explicit_design_intent_changes_style_interactions(self):
