@@ -42,6 +42,7 @@ FEATURE_COLUMNS = {
 }
 REQUIRED = {
     "case_id", "session_id", "style", "thickness", "length", "arch", "selected",
+    "consent_recorded", "consent_version", "consent_timestamp", "display_position", "design_intent",
     *FEATURE_COLUMNS,
 }
 EXPECTED_STYLES = {"natural", "soft", "defined"}
@@ -190,11 +191,22 @@ def build_choice_sessions(rows: list[dict[str, str]], source: str = "CSV") -> li
         case_id = row.get("case_id", "").strip()
         session_id = row.get("session_id", "").strip()
         if not case_id or not session_id:
-            raise ValueError(
-                f"{source} row {row_num} needs stable case_id and session_id. "
-                "The current APK export does not contain session_id. Prepare a session CSV with exactly three style candidates " +
-                "(natural, soft, defined) per session and exactly one selected candidate before using this experimental trainer."
-            )
+            raise ValueError(f"{source} row {row_num} needs stable case_id and session_id.")
+        consent = row.get("consent_recorded", "").strip().lower()
+        if consent not in {"true", "1", "yes"}:
+            raise ValueError(f"{source} row {row_num} is not marked as consented for preference research.")
+        if row.get("consent_version", "").strip() != "brow-choice-v1":
+            raise ValueError(f"{source} row {row_num} has an unsupported consent version.")
+        try:
+            consent_timestamp = int(row.get("consent_timestamp", ""))
+            display_position = int(row.get("display_position", ""))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{source} row {row_num} has invalid consent timestamp or display position.") from exc
+        if consent_timestamp <= 0 or display_position not in (0, 1, 2):
+            raise ValueError(f"{source} row {row_num} has invalid consent timestamp or display position.")
+        rating = row.get("rating", "").strip()
+        if rating and rating not in {"1", "2", "3", "4", "5"}:
+            raise ValueError(f"{source} row {row_num} has an invalid optional 1-5 rating.")
         grouped.setdefault(session_id, []).append((row, row_num))
 
     sessions: list[dict[str, Any]] = []
@@ -206,7 +218,19 @@ def build_choice_sessions(rows: list[dict[str, str]], source: str = "CSV") -> li
             index for index, (row, row_num) in enumerate(records)
             if parse_selected(row.get("selected", ""), source=source, row_num=row_num)
         ]
-        if len(records) != 3 or len(case_ids) != 1 or set(styles) != EXPECTED_STYLES or len(set(styles)) != 3:
+        positions = [int(row["display_position"]) for row, _ in records]
+        intents = {row["design_intent"].strip() for row, _ in records}
+        consent_versions = {row["consent_version"].strip() for row, _ in records}
+        consent_timestamps = {row["consent_timestamp"].strip() for row, _ in records}
+        if len(intents) != 1:
+            raise ValueError(f"{source} session {session_id!r} contains inconsistent design intent values.")
+        if len(consent_timestamps) != 1:
+            raise ValueError(f"{source} session {session_id!r} contains inconsistent consent timestamps.")
+        if (
+            len(records) != 3 or len(case_ids) != 1 or set(styles) != EXPECTED_STYLES or len(set(styles)) != 3
+            or sorted(positions) != [0, 1, 2]
+            or consent_versions != {"brow-choice-v1"}
+        ):
             bad.append(session_id)
             continue
         if len(selected_indices) != 1:

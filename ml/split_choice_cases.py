@@ -9,8 +9,48 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-REQUIRED = {"case_id", "session_id", "style", "selected"}
+REQUIRED = {"case_id", "session_id", "style", "selected", "consent_recorded", "consent_version", "consent_timestamp", "display_position", "design_intent"}
 EXPECTED_STYLES = {"natural", "soft", "defined"}
+
+
+def validate_session(session_id: str, records: list[dict[str, str]]) -> None:
+    cases = {row.get("case_id", "").strip() for row in records}
+    styles = [row.get("style", "").strip().lower() for row in records]
+    selected_count = sum(
+        row.get("selected", "").strip().lower() in {"true", "1", "yes"}
+        for row in records
+    )
+    positions = []
+    for row in records:
+        try:
+            position = int(row.get("display_position", ""))
+            consent_timestamp = int(row.get("consent_timestamp", ""))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Session {session_id!r} has invalid display position or consent timestamp.") from exc
+        if position not in (0, 1, 2) or consent_timestamp <= 0:
+            raise ValueError(f"Session {session_id!r} has invalid display position or consent timestamp.")
+        if row.get("consent_recorded", "").strip().lower() not in {"true", "1", "yes"}:
+            raise ValueError(f"Session {session_id!r} contains a row without recorded consent.")
+        if row.get("consent_version", "").strip() != "brow-choice-v1":
+            raise ValueError(f"Session {session_id!r} contains an unsupported consent version.")
+        positions.append(position)
+    intents = {row.get("design_intent", "").strip() for row in records}
+    timestamps = {row.get("consent_timestamp", "").strip() for row in records}
+    if (
+        len(records) != 3 or len(cases) != 1 or "" in cases
+        or set(styles) != EXPECTED_STYLES or len(set(styles)) != 3
+    ):
+        raise ValueError(
+            f"Session {session_id!r} must contain exactly natural, soft and defined once each for one case_id."
+        )
+    if selected_count != 1:
+        raise ValueError(f"Session {session_id!r} must contain exactly one selected candidate.")
+    if sorted(positions) != [0, 1, 2]:
+        raise ValueError(f"Session {session_id!r} must contain each randomized display position 0, 1 and 2 once.")
+    if len(intents) != 1 or "" in intents:
+        raise ValueError(f"Session {session_id!r} must use one consistent, explicit design intent.")
+    if len(timestamps) != 1:
+        raise ValueError(f"Session {session_id!r} must share one consent timestamp.")
 
 
 def read_and_validate(path: Path) -> tuple[list[str], list[dict[str, str]]]:
@@ -41,18 +81,7 @@ def read_and_validate(path: Path) -> tuple[list[str], list[dict[str, str]]]:
         by_session[session_id].append(row)
 
     for session_id, records in by_session.items():
-        cases = {row["case_id"].strip() for row in records}
-        styles = [row["style"].strip().lower() for row in records]
-        selected_count = sum(
-            row["selected"].strip().lower() in {"true", "1", "yes"} for row in records
-        )
-        if len(records) != 3 or len(cases) != 1 or set(styles) != EXPECTED_STYLES or len(set(styles)) != 3:
-            raise ValueError(
-                f"Session {session_id!r} must contain exactly natural, soft and defined "
-                "once each for one case_id."
-            )
-        if selected_count != 1:
-            raise ValueError(f"Session {session_id!r} must contain exactly one selected candidate.")
+        validate_session(session_id, records)
 
     return headers, rows
 
@@ -68,26 +97,9 @@ def split_rows(
     for row in rows:
         by_session[row.get("session_id", "").strip()].append(row)
     for session_id, records in by_session.items():
-        case_ids = {row.get("case_id", "").strip() for row in records}
-        styles = [row.get("style", "").strip().lower() for row in records]
-        selected_count = sum(
-            row.get("selected", "").strip().lower() in {"true", "1", "yes"}
-            for row in records
-        )
-        if (
-            not session_id
-            or len(records) != 3
-            or len(case_ids) != 1
-            or "" in case_ids
-            or set(styles) != EXPECTED_STYLES
-            or len(set(styles)) != 3
-        ):
-            raise ValueError(
-                f"Session {session_id!r} must contain exactly natural, soft and defined "
-                "once each for one customer."
-            )
-        if selected_count != 1:
-            raise ValueError(f"Session {session_id!r} must contain exactly one selected candidate.")
+        if not session_id:
+            raise ValueError("Every choice session must have a non-empty session_id.")
+        validate_session(session_id, records)
 
     if not (0.0 < development_fraction < 1.0):
         raise ValueError("development_fraction must lie strictly between 0 and 1.")

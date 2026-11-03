@@ -11,8 +11,8 @@ android {
         applicationId = "com.example.facepattern"
         minSdk = 24
         targetSdk = 36
-        versionCode = 15
-        versionName = "0.9.6"
+        versionCode = 16
+        versionName = "0.9.7"
         // Self-use target: OPPO Find X7 / modern ARM64 Android phones.
         // Keeping only this ABI avoids bundling unused x86 and 32-bit native runtimes.
         ndk {
@@ -46,7 +46,7 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.4.2")
     implementation("androidx.camera:camera-view:1.4.2")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
-    implementation("com.google.mediapipe:tasks-vision:0.10.21")
+    implementation("com.google.mediapipe:tasks-vision:0.10.21")\n    implementation("com.google.ar:core:1.56.0")
     implementation("org.tensorflow:tensorflow-lite:2.17.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.23.2")
 }

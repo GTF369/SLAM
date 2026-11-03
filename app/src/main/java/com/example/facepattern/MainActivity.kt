@@ -351,6 +351,11 @@ class MainActivity : AppCompatActivity() {
             "重新拍摄" to { retakePhoto() }
         ))
         addButtonRow(designControls, listOf(
+            "三维深度能力检测" to {
+                startActivity(android.content.Intent(this, ArCoreDepthProbeActivity::class.java))
+            }
+        ))
+        addButtonRow(designControls, listOf(
             "转印误差记录" to { showTransferValidationRecord() },
             "导出转印数据" to { exportTransferValidationCsv() }
         ))
