@@ -222,10 +222,14 @@ def build_choice_sessions(rows: list[dict[str, str]], source: str = "CSV") -> li
         intents = {row["design_intent"].strip() for row, _ in records}
         consent_versions = {row["consent_version"].strip() for row, _ in records}
         consent_timestamps = {row["consent_timestamp"].strip() for row, _ in records}
+        if len(intents) != 1:
+            raise ValueError(f"{source} session {session_id!r} contains inconsistent design intent values.")
+        if len(consent_timestamps) != 1:
+            raise ValueError(f"{source} session {session_id!r} contains inconsistent consent timestamps.")
         if (
             len(records) != 3 or len(case_ids) != 1 or set(styles) != EXPECTED_STYLES or len(set(styles)) != 3
-            or sorted(positions) != [0, 1, 2] or len(intents) != 1
-            or consent_versions != {"brow-choice-v1"} or len(consent_timestamps) != 1
+            or sorted(positions) != [0, 1, 2]
+            or consent_versions != {"brow-choice-v1"}
         ):
             bad.append(session_id)
             continue
