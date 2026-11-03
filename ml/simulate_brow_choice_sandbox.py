@@ -107,7 +107,8 @@ def make_synthetic_rows(
             "design_intent": design_intent_labels[design_intent],
         }
         candidate_rows: list[dict[str, str]] = []
-        for style, thickness, length, arch in STYLE_CANDIDATES:
+        consent_timestamp = str(1_800_000_000_000 + case_index)
+        for display_position, (style, thickness, length, arch) in enumerate(STYLE_CANDIDATES):
             candidate_rows.append({
                 **base_fields,
                 "style": style,
@@ -115,6 +116,10 @@ def make_synthetic_rows(
                 "length": f"{length:.8f}",
                 "arch": f"{arch:.8f}",
                 "selected": "false",
+                "consent_recorded": "true",
+                "consent_version": "brow-choice-v1",
+                "consent_timestamp": consent_timestamp,
+                "display_position": str(display_position),
             })
         candidate_features = np.stack([
             feature_row(row, source="synthetic generator", row_num=index + 2)
