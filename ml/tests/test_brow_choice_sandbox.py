@@ -2,11 +2,37 @@
 
 import unittest
 
-from ml.simulate_brow_choice_sandbox import run_sandbox
-from ml.train_brow_choice_ranker import CHOICE_FEATURE_NAMES, expand_choice_features
+from ml.simulate_brow_choice_sandbox import make_synthetic_rows, run_sandbox
+from ml.train_brow_choice_ranker import (
+    CHOICE_FEATURE_NAMES, build_choice_sessions, expand_choice_features,
+)
 
 
 class BrowChoiceSandboxTests(unittest.TestCase):
+    def test_choice_trainer_accepts_export_schema_with_consent_and_positions(self):
+        rows, _ = make_synthetic_rows(1, "SCHEMA", 11)
+        sessions = build_choice_sessions(rows, "synthetic schema test")
+        self.assertEqual(len(sessions), 1)
+        self.assertEqual(sessions[0]["x"].shape, (3, 39))
+
+    def test_choice_trainer_rejects_unconsented_feedback(self):
+        rows, _ = make_synthetic_rows(1, "NO-CONSENT", 12)
+        rows[0]["consent_recorded"] = "false"
+        with self.assertRaisesRegex(ValueError, "not marked as consented"):
+            build_choice_sessions(rows, "unconsented test")
+
+    def test_choice_trainer_rejects_inconsistent_candidate_display_positions(self):
+        rows, _ = make_synthetic_rows(1, "BAD-POSITION", 13)
+        rows[1]["display_position"] = rows[0]["display_position"]
+        with self.assertRaisesRegex(ValueError, "invalid choice sessions"):
+            build_choice_sessions(rows, "display-position test")
+
+    def test_choice_trainer_rejects_mixed_intent_within_session(self):
+        rows, _ = make_synthetic_rows(1, "MIXED-INTENT", 14)
+        rows[1]["design_intent"] = "偏立体"
+        with self.assertRaisesRegex(ValueError, "invalid choice sessions"):
+            build_choice_sessions(rows, "mixed-intent test")
+
     def test_explicit_design_intent_changes_style_interactions(self):
         base = [0.0] * 15
         base[9] = 0.4
