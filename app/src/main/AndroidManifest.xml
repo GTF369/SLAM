@@ -3,6 +3,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-feature android:name="android.hardware.camera.front" android:required="true" />
     <application android:allowBackup="false" android:label="眉形设计助手" android:theme="@style/AppTheme">
+        <meta-data android:name="com.google.ar.core" android:value="optional" />
+        <activity android:name=".ArCoreDepthProbeActivity" android:exported="false" />
         <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="portrait">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
