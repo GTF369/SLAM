@@ -21,6 +21,11 @@ def fake_rows(cases=20):
                 "style": style,
                 "selected": str(selected).lower(),
                 "rating": "5" if selected else "",
+                "consent_recorded": "true",
+                "consent_version": "brow-choice-v1",
+                "consent_timestamp": str(1800000000000 + case),
+                "display_position": str({"natural": 0, "soft": 1, "defined": 2}[style]),
+                "design_intent": "均衡自然",
             })
     return rows
 
@@ -60,6 +65,24 @@ class SplitChoiceCasesTests(unittest.TestCase):
         ambiguous[0]["selected"] = "true"
         with self.assertRaises(ValueError):
             split_rows(ambiguous)
+
+    def test_rejects_unconsented_rows(self):
+        rows = fake_rows(4)
+        rows[0]["consent_recorded"] = "false"
+        with self.assertRaisesRegex(ValueError, "without recorded consent"):
+            split_rows(rows)
+
+    def test_rejects_duplicate_display_positions(self):
+        rows = fake_rows(4)
+        rows[1]["display_position"] = "0"
+        with self.assertRaisesRegex(ValueError, "display position"):
+            split_rows(rows)
+
+    def test_rejects_mixed_design_intent_within_session(self):
+        rows = fake_rows(4)
+        rows[2]["design_intent"] = "偏立体"
+        with self.assertRaisesRegex(ValueError, "consistent"):
+            split_rows(rows)
 
     def test_reads_valid_csv_and_requires_stable_case_and_session(self):
         rows = fake_rows(5)
